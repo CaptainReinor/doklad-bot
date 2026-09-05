@@ -65,6 +65,11 @@ async function main() {
         const commonA = a.locator('#topicsContainer .topic-card').filter({hasText:'Общий тестовый доклад'});
         await commonA.getByRole('button', {name:'Выбрать тему'}).click();
         await commonA.getByRole('button', {name:'Отменить выбор'}).waitFor();
+        await a.getByRole('button', {name:/Мои доклады/}).click();
+        assert.equal(await a.locator('#topicsContainer .topic-card').count(), 1);
+        assert.match(await a.locator('#topicsContainer').textContent(), /Общий тестовый доклад/);
+        await a.getByRole('button', {name:'Все предметы'}).click();
+        checks.push('My reports filter shows only the current student bookings');
         await b.evaluate(() => refreshState());
         const commonB = b.locator('#topicsContainer .topic-card').filter({hasText:'Общий тестовый доклад'});
         assert.equal(await commonB.getByRole('button', {name:'Выбрать тему'}).isDisabled(), true);
@@ -135,6 +140,20 @@ async function main() {
         checks.push('Homework has its own read-only student tab and admin create/edit/delete controls');
         await admin.evaluate(() => closeHomeworkEditor());
         await admin.getByRole('button', {name:'📚 Управление темами'}).click();
+        await admin.locator('#draftTopicTitles').fill('1. Массовая тема А\n2. Массовая тема Б');
+        await admin.locator('#draftTopicSubject').selectOption({label:'Бизнес-процессы'});
+        await admin.locator('#draftTopicDeadline').fill('2026-10-10');
+        await admin.locator('#draftTopicGroup').selectOption('МН-4-25-02');
+        await admin.getByRole('button', {name:'Добавить список в черновик'}).click();
+        await admin.locator('.draft-item').first().waitFor();
+        assert.equal(await admin.locator('.draft-item').count(), 2);
+        assert.match(await admin.locator('.notification-preview').textContent(), /Добавлены новые темы докладов: 2/);
+        assert.match(await admin.locator('.notification-preview').textContent(), /Массовая тема А/);
+        admin.once('dialog', dialog => dialog.accept());
+        await admin.getByRole('button', {name:'Опубликовать 2 тем'}).click();
+        await admin.locator('input[value="Массовая тема Б"]').waitFor();
+        assert.match(await admin.locator('.draft-panel').textContent(), /Черновик пуст/);
+        checks.push('Bulk topic draft persists, previews one notification, and publishes in one action');
         await admin.locator('#newTopicTitle').fill('Тестовая тема администратора');
         await admin.locator('#newTopicSubject').selectOption({label:'Бизнес-процессы'});
         await admin.locator('#newTopicDeadline').fill('2026-10-15');
@@ -162,6 +181,11 @@ async function main() {
         await admin.screenshot({path:path.join(artifacts, 'admin-topics-desktop.png'), fullPage:true});
 
         await admin.evaluate(() => closeTopicEditor());
+        await admin.getByRole('button', {name:'🕘 История действий'}).click();
+        assert.match(await admin.locator('.audit-list').textContent(), /Опубликовано тем: 2/);
+        assert.match(await admin.locator('.audit-list').textContent(), /Администратор Тестовый/);
+        checks.push('Admin audit history records publications and edits');
+        await admin.getByRole('button', {name:'Вернуться в кабинет'}).click();
         await admin.getByRole('button', {name:'🗓 Управление расписанием'}).click();
         assert.equal(await admin.locator('#newLesson-subject').getAttribute('list'), 'scheduleSubjectSuggestions');
         assert.ok(await admin.locator('#scheduleSubjectSuggestions option').count() >= 8);

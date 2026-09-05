@@ -210,6 +210,16 @@ class Service:
             ]} for topic in all_topics]
             result['adminLessons'] = self.db.get_lessons(include_inactive=True)
             result['adminAssignments'] = self.db.get_assignments()
+            result['topicDrafts'] = [{
+                'id': row['id'], 'title': row['title'], 'subject': row['subject'],
+                'deadline': row['deadline'], 'isCommon': row['is_common'],
+                'isMulti': row['is_multi'], 'group': row['group_name']
+            } for row in self.db.get_topic_drafts(user_id)]
+            result['auditLog'] = [{
+                'id': row['id'], 'action': row['action'], 'entityType': row['entity_type'],
+                'entityId': row['entity_id'], 'summary': row['summary'],
+                'actor': row['actor_name'], 'createdAt': row['created_at']
+            } for row in self.db.get_audit_log()]
         return result
 
     def perform(self, user_id, data, telegram_user=None):
@@ -224,7 +234,9 @@ class Service:
                 booking_id = data.get('bookingId')
                 if type(booking_id) is not int:
                     raise ActionError('Бронирование не найдено.')
-                self.db.cancel_booking_as_admin(booking_id)
+                booking = self.db.cancel_booking_as_admin(booking_id)
+                self.db.log_audit(user_id, 'cancel_booking', 'booking', booking_id,
+                                  f"Снята бронь «{booking['topic']}» у {booking['booked_by']}")
                 return 'Бронирование снято.'
             if action in ('create_assignment', 'update_assignment', 'delete_assignment'):
                 if not self.is_admin(user_id):
@@ -233,7 +245,9 @@ class Service:
                     subject = self._topic_subject(data.get('subject'))
                     description = clean_description(data.get('description'))
                     deadline = self._valid_deadline(data.get('deadline'))
-                    self.db.create_assignment(subject, description, deadline)
+                    assignment = self.db.create_assignment(subject, description, deadline)
+                    self.db.log_audit(user_id, 'create', 'assignment', assignment['id'],
+                                      f'Добавлена домашка: {subject}')
                     return 'Домашнее задание добавлено.'
                 assignment_id = data.get('assignmentId')
                 if type(assignment_id) is not int or not self.db.get_assignment(assignment_id):
@@ -243,29 +257,76 @@ class Service:
                     description = clean_description(data.get('description'))
                     deadline = self._valid_deadline(data.get('deadline'))
                     self.db.update_assignment(assignment_id, subject, description, deadline)
+                    self.db.log_audit(user_id, 'update', 'assignment', assignment_id,
+                                      f'Изменена домашка: {subject}')
                     return 'Домашнее задание сохранено.'
+                assignment = self.db.get_assignment(assignment_id)
                 self.db.delete_assignment(assignment_id)
+                self.db.log_audit(user_id, 'delete', 'assignment', assignment_id,
+                                  f"Удалена домашка: {assignment['subject']}")
                 return 'Домашнее задание удалено.'
             if action in ('create_lesson', 'update_lesson', 'set_lesson_active', 'delete_lesson'):
                 if not self.is_admin(user_id):
                     raise ActionError('Управлять расписанием может только администратор.', 403)
                 if action == 'create_lesson':
-                    self.db.create_lesson(self._lesson_data(data))
+                    lesson = self.db.create_lesson(self._lesson_data(data))
+                    self.db.log_audit(user_id, 'create', 'lesson', lesson['id'],
+                                      f"Добавлена пара: {lesson['date']} · {lesson['subject']}")
                     return 'Занятие добавлено.'
                 lesson_id = data.get('lessonId')
                 if type(lesson_id) is not int or not self.db.get_lesson(lesson_id):
                     raise ActionError('Занятие не найдено.')
                 if action == 'update_lesson':
-                    self.db.update_lesson(lesson_id, self._lesson_data(data))
+                    lesson = self.db.update_lesson(lesson_id, self._lesson_data(data))
+                    self.db.log_audit(user_id, 'update', 'lesson', lesson_id,
+                                      f"Изменена пара: {lesson['date']} · {lesson['subject']}")
                     return 'Занятие сохранено.'
                 if action == 'set_lesson_active':
                     active = data.get('active')
                     if type(active) is not bool:
                         raise ActionError('Некорректный статус занятия.')
                     self.db.set_lesson_active(lesson_id, active)
+                    lesson = self.db.get_lesson(lesson_id)
+                    self.db.log_audit(user_id, 'restore' if active else 'archive', 'lesson', lesson_id,
+                                      f"{'Восстановлена' if active else 'Архивирована'} пара: {lesson['date']} · {lesson['subject']}")
                     return 'Занятие возвращено в расписание.' if active else 'Занятие перенесено в архив.'
+                lesson = self.db.get_lesson(lesson_id)
                 self.db.delete_lesson(lesson_id)
+                self.db.log_audit(user_id, 'delete', 'lesson', lesson_id,
+                                  f"Удалена пара: {lesson['date']} · {lesson['subject']}")
                 return 'Занятие удалено.'
+            if action in ('add_topic_drafts', 'delete_topic_draft', 'clear_topic_drafts',
+                          'publish_topic_drafts'):
+                if not self.is_admin(user_id):
+                    raise ActionError('Управлять черновиками может только администратор.', 403)
+                if action == 'add_topic_drafts':
+                    titles = data.get('titles')
+                    if not isinstance(titles, list) or not 1 <= len(titles) <= 50:
+                        raise ActionError('Добавьте от 1 до 50 тем.')
+                    titles = [clean_text(title, 'название темы', 3, 200) for title in titles]
+                    if len({title.casefold() for title in titles}) != len(titles):
+                        raise ActionError('Удалите повторяющиеся темы из списка.')
+                    subject = self._topic_subject(data.get('subject'))
+                    is_common, is_multi, group_name = self._topic_scope(data)
+                    deadline = self._valid_deadline(data['deadline']) if data.get('deadline') else ''
+                    self.db.add_topic_drafts(user_id, [{
+                        'title': title, 'subject': subject, 'deadline': deadline,
+                        'is_common': is_common, 'is_multi': is_multi, 'group_name': group_name
+                    } for title in titles])
+                    return f'В черновик добавлено тем: {len(titles)}.'
+                if action == 'delete_topic_draft':
+                    draft_id = data.get('draftId')
+                    if type(draft_id) is not int:
+                        raise ActionError('Тема в черновике не найдена.')
+                    self.db.delete_topic_draft(user_id, draft_id)
+                    return 'Тема удалена из черновика.'
+                if action == 'clear_topic_drafts':
+                    self.db.clear_topic_drafts(user_id)
+                    return 'Черновик очищен.'
+                topics = self.db.publish_topic_drafts(user_id)
+                self.db.log_audit(user_id, 'publish', 'topic_batch', None,
+                                  f'Опубликовано тем: {len(topics)}')
+                return f'Опубликовано тем: {len(topics)}. Пользователи получат одну подборку.'
             if action in ('create_topic', 'update_topic', 'set_topic_active', 'delete_topic'):
                 if not self.is_admin(user_id):
                     raise ActionError('Управлять темами может только администратор.', 403)
@@ -277,6 +338,8 @@ class Service:
                     topic = self.db.create_topic(title, subject, is_common, is_multi, group_name)
                     if deadline:
                         self.db.set_deadline('topics', topic['id'], deadline, title)
+                    self.db.log_audit(user_id, 'create', 'topic', topic['id'],
+                                      f'Добавлена тема: {title}')
                     return 'Тема добавлена.'
                 item_id = data.get('topicId')
                 existing_topic = self.find_topic(item_id, include_inactive=True)
@@ -290,14 +353,20 @@ class Service:
                     topic = self.db.update_topic(item_id, title, subject, is_common, is_multi, group_name)
                     if deadline and existing_topic.get('deadline') != deadline:
                         self.db.set_deadline('topics', item_id, deadline, topic['title'])
+                    self.db.log_audit(user_id, 'update', 'topic', item_id,
+                                      f'Изменена тема: {topic["title"]}')
                     return 'Тема сохранена.'
                 if action == 'set_topic_active':
                     active = data.get('active')
                     if type(active) is not bool:
                         raise ActionError('Некорректный статус темы.')
                     self.db.set_topic_active(item_id, active)
+                    self.db.log_audit(user_id, 'restore' if active else 'archive', 'topic', item_id,
+                                      f"{'Восстановлена' if active else 'Архивирована'} тема: {existing_topic['title']}")
                     return 'Тема возвращена из архива.' if active else 'Тема перенесена в архив.'
                 self.db.delete_topic(item_id)
+                self.db.log_audit(user_id, 'delete', 'topic', item_id,
+                                  f"Удалена тема: {existing_topic['title']}")
                 return 'Тема удалена.'
             if action == 'set_deadline':
                 if not self.is_admin(user_id):
@@ -312,6 +381,8 @@ class Service:
                 deadline = self._valid_deadline(data.get('deadline'))
                 if item.get('deadline') != deadline:
                     self.db.set_deadline(kind, item_id, deadline, item['title'])
+                    self.db.log_audit(user_id, 'deadline', 'topic', item_id,
+                                      f"Изменён срок темы «{item['title']}»: {deadline}")
                 return 'Срок сохранён.'
             if action in ('register', 'edit_profile'):
                 if action == 'edit_profile' and not current:

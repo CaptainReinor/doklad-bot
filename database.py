@@ -167,6 +167,26 @@ class Database:
                 deadline TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL)''')
+            conn.execute('''CREATE TABLE IF NOT EXISTS topic_drafts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER NOT NULL,
+                title TEXT NOT NULL COLLATE NOCASE,
+                subject TEXT NOT NULL,
+                deadline TEXT NOT NULL DEFAULT '',
+                is_common INTEGER NOT NULL DEFAULT 0,
+                is_multi INTEGER NOT NULL DEFAULT 0,
+                group_name TEXT NOT NULL DEFAULT 'МН-4-25-01',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(admin_id, title))''')
+            conn.execute('''CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                actor_id INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
+                entity_id INTEGER,
+                summary TEXT NOT NULL,
+                created_at TEXT NOT NULL)''')
             if schema_version < 6:
                 conn.execute("DELETE FROM deadlines WHERE kind='assignments'")
                 conn.execute('''UPDATE notification_jobs SET sent_at=?
@@ -180,7 +200,7 @@ class Database:
                         (kind='assignments' AND event_key NOT LIKE 'deadline:%'))''',
                              (migration_time,))
                 conn.execute("DELETE FROM notification_settings WHERE kind IN ('bookings', 'queue')")
-            conn.execute('PRAGMA user_version=9')
+            conn.execute('PRAGMA user_version=10')
 
     @staticmethod
     def _user(conn, user_id):
@@ -286,6 +306,107 @@ class Database:
                 return topic
         except sqlite3.IntegrityError as exc:
             raise ValueError('Тема с таким названием уже существует.') from exc
+
+    @staticmethod
+    def _draft(row):
+        item = dict(row)
+        item['is_common'] = bool(item['is_common'])
+        item['is_multi'] = bool(item['is_multi'])
+        return item
+
+    def get_topic_drafts(self, admin_id):
+        with self.connection() as conn:
+            return [self._draft(row) for row in conn.execute(
+                'SELECT * FROM topic_drafts WHERE admin_id=? ORDER BY id', (admin_id,))]
+
+    def add_topic_drafts(self, admin_id, drafts):
+        try:
+            with self.connection() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                existing = {row['title'].casefold() for row in conn.execute('SELECT title FROM topics')}
+                existing.update(row['title'].casefold() for row in conn.execute(
+                    'SELECT title FROM topic_drafts WHERE admin_id=?', (admin_id,)))
+                incoming = [item['title'].casefold() for item in drafts]
+                if len(incoming) != len(set(incoming)) or any(title in existing for title in incoming):
+                    raise ValueError('В списке есть повтор или тема, которая уже существует.')
+                now = timestamp()
+                conn.executemany('''INSERT INTO topic_drafts
+                    (admin_id, title, subject, deadline, is_common, is_multi, group_name,
+                     created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''', [
+                    (admin_id, item['title'], item['subject'], item.get('deadline', ''),
+                     int(item['is_common']), int(item['is_multi']), item['group_name'], now, now)
+                    for item in drafts
+                ])
+                return [self._draft(row) for row in conn.execute(
+                    'SELECT * FROM topic_drafts WHERE admin_id=? ORDER BY id', (admin_id,))]
+        except sqlite3.IntegrityError as exc:
+            raise ValueError('В списке есть повтор или тема, которая уже существует.') from exc
+
+    def delete_topic_draft(self, admin_id, draft_id):
+        with self.connection() as conn:
+            cursor = conn.execute('DELETE FROM topic_drafts WHERE id=? AND admin_id=?',
+                                  (draft_id, admin_id))
+            if not cursor.rowcount:
+                raise ValueError('Тема в черновике не найдена.')
+
+    def clear_topic_drafts(self, admin_id):
+        with self.connection() as conn:
+            return conn.execute('DELETE FROM topic_drafts WHERE admin_id=?', (admin_id,)).rowcount
+
+    def publish_topic_drafts(self, admin_id):
+        try:
+            with self.connection() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                drafts = list(conn.execute(
+                    'SELECT * FROM topic_drafts WHERE admin_id=? ORDER BY id', (admin_id,)))
+                if not drafts:
+                    raise ValueError('Черновик пуст.')
+                now = timestamp()
+                deliver_after = time.time() + TOPIC_NOTIFICATION_BATCH_DELAY
+                conn.execute('''UPDATE notification_jobs SET next_attempt=?
+                    WHERE sent_at IS NULL AND event_key LIKE 'topic-added:%' ''', (deliver_after,))
+                topics = []
+                for draft in drafts:
+                    cursor = conn.execute('''INSERT INTO topics
+                        (title, subject, is_common, is_multi, group_name, active, deleted,
+                         created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?)''',
+                        (draft['title'], draft['subject'], draft['is_common'], draft['is_multi'],
+                         draft['group_name'], now, now))
+                    topic = self._topic(conn, cursor.lastrowid)
+                    if draft['deadline']:
+                        conn.execute('''INSERT INTO deadlines (kind, item_id, deadline)
+                            VALUES ('topics', ?, ?)''', (topic['id'], draft['deadline']))
+                    scope = 'Общий доклад' if topic['is_common'] else f"Группа: {topic['group_name']}"
+                    recipients = None if topic['is_common'] else {
+                        row['user_id'] for row in conn.execute(
+                            'SELECT user_id FROM users WHERE group_name=?', (topic['group_name'],))}
+                    self._enqueue(conn, 'topics',
+                                  f"{topic['title']}\nПредмет: {topic['subject']}\n{scope}",
+                                  event_key=f"topic-added:{topic['id']}", recipients=recipients,
+                                  next_attempt=deliver_after)
+                    topics.append(topic)
+                conn.execute('DELETE FROM topic_drafts WHERE admin_id=?', (admin_id,))
+                return topics
+        except sqlite3.IntegrityError as exc:
+            raise ValueError('Одна из тем уже существует. Обновите черновик.') from exc
+
+    def log_audit(self, actor_id, action, entity_type, entity_id, summary):
+        with self.connection() as conn:
+            conn.execute('''INSERT INTO audit_log
+                (actor_id, action, entity_type, entity_id, summary, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)''',
+                         (actor_id, action, entity_type, entity_id, summary, timestamp()))
+            conn.execute('''DELETE FROM audit_log WHERE id NOT IN
+                (SELECT id FROM audit_log ORDER BY id DESC LIMIT 300)''')
+
+    def get_audit_log(self, limit=100):
+        limit = max(1, min(int(limit), 300))
+        with self.connection() as conn:
+            return [dict(row) for row in conn.execute('''SELECT a.*,
+                    COALESCE(NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''),
+                             'Администратор ' || a.actor_id) AS actor_name
+                FROM audit_log a LEFT JOIN users u ON u.user_id=a.actor_id
+                ORDER BY a.id DESC LIMIT ?''', (limit,))]
 
     def update_topic(self, topic_id, title, subject, is_common, is_multi, group_name):
         try:

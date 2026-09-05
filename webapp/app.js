@@ -5,9 +5,10 @@ const apiBase = (window.APP_CONFIG?.apiBaseUrl || window.location.origin).replac
 let scheduleData = [], topicsData = [], assignmentsData = [];
 let bookings = [], myBookings = [], notificationSettings = {};
 let adminTopics = [], adminLessons = [], adminAssignments = [];
+let adminTopicDrafts = [], adminAuditLog = [];
 let userData = null, isRegistered = false, isAdmin = false;
 let connected = false, busy = false, editingProfile = false;
-let editingTopics = false, editingSchedule = false, editingHomework = false;
+let editingTopics = false, editingSchedule = false, editingHomework = false, editingAudit = false;
 let mutationVersion = 0, refreshing = false, participants = 0;
 let currentScheduleFilter = "upcoming", studyTimezone = "Europe/Moscow";
 let currentTopicSubject = "all";
@@ -128,6 +129,8 @@ function applyState(data) {
     adminTopics = isAdmin && Array.isArray(data.adminTopics) ? data.adminTopics : [];
     adminLessons = isAdmin && Array.isArray(data.adminLessons) ? data.adminLessons : [];
     adminAssignments = isAdmin && Array.isArray(data.adminAssignments) ? data.adminAssignments : [];
+    adminTopicDrafts = isAdmin && Array.isArray(data.topicDrafts) ? data.topicDrafts : [];
+    adminAuditLog = isAdmin && Array.isArray(data.auditLog) ? data.auditLog : [];
     bookings = data.bookings;
     myBookings = bookings.filter(item => item.isMine);
     notificationSettings = data.notifications || {};
@@ -145,7 +148,7 @@ function renderAll() {
     renderMyBookings();
     renderQueue();
     renderNotifications();
-    if (!editingProfile && !editingTopics && !editingSchedule && !editingHomework) renderCabinet();
+    if (!editingProfile && !editingTopics && !editingSchedule && !editingHomework && !editingAudit) renderCabinet();
     document.querySelectorAll('#cabinetContent button[type="submit"]').forEach(button => {
         button.disabled = !connected || busy;
     });
@@ -226,10 +229,12 @@ function renderTopics() {
     const filters = document.getElementById("topicSubjectFilters");
     const subjects = [...new Set(topicsData.map(topic => topic.subject || ""))]
         .sort((a, b) => shortSubject(a).localeCompare(shortSubject(b), "ru"));
-    if (currentTopicSubject !== "all" && !subjects.includes(currentTopicSubject)) {
+    if ((currentTopicSubject === "mine" && !isRegistered) ||
+            (currentTopicSubject !== "all" && currentTopicSubject !== "mine" && !subjects.includes(currentTopicSubject))) {
         currentTopicSubject = "all";
     }
     filters.innerHTML = [{value: "all", label: "Все предметы"},
+        ...(isRegistered ? [{value: "mine", label: `Мои доклады · ${myBookings.length}`}] : []),
         ...subjects.map(subject => ({value: subject, label: shortSubject(subject)}))]
         .map(item => `<button class="filter-btn ${currentTopicSubject === item.value ? "active" : ""}"
             data-topic-subject="${escapeHtml(item.value)}" title="${escapeHtml(item.value === "all" ? item.label : (item.value || item.label))}">
@@ -241,8 +246,10 @@ function renderTopics() {
         });
     });
 
+    const myTopicIds = new Set(myBookings.map(item => item.id));
     const visibleTopics = currentTopicSubject === "all" ? topicsData
-        : topicsData.filter(topic => (topic.subject || "") === currentTopicSubject);
+        : currentTopicSubject === "mine" ? topicsData.filter(topic => myTopicIds.has(topic.id))
+            : topicsData.filter(topic => (topic.subject || "") === currentTopicSubject);
     container.innerHTML = visibleTopics.length ? visibleTopics.map(topic => {
         const {owners, mine, occupied, status} = topicBookingState(topic);
         const disabled = !connected || busy || (!mine && occupied);
@@ -260,7 +267,8 @@ function renderTopics() {
                 onclick="${mine ? "cancelBooking" : "handleTopicBooking"}(${topic.id})" ${disabled ? "disabled" : ""}>
                 ${mine ? "Отменить выбор" : "Выбрать тему"}</button>
         </article>`;
-    }).join("") : '<div class="empty-state">По этому предмету тем пока нет.</div>';
+    }).join("") : `<div class="empty-state">${currentTopicSubject === "mine"
+        ? "Вы пока не выбрали ни одного доклада." : "По этому предмету тем пока нет."}</div>`;
     const visibleIds = new Set(visibleTopics.map(topic => topic.id));
     document.getElementById("topicsCount").textContent = visibleTopics.length;
     document.getElementById("bookedTopicsCount").textContent = new Set(
@@ -366,6 +374,7 @@ function renderCabinet() {
             <button class="btn btn-primary" onclick="renderTopicEditor()">📚 Управление темами</button>
             <button class="btn btn-primary" onclick="renderHomeworkEditor()">📝 Управление домашкой</button>
             <button class="btn btn-primary" onclick="renderScheduleEditor()">🗓 Управление расписанием</button>
+            <button class="btn btn-outline" onclick="renderAuditLog()">🕘 История действий</button>
             </div></div>` : ""}`;
 }
 
@@ -379,6 +388,7 @@ function renderTopicEditor() {
     if (!isAdmin) return;
     editingSchedule = false;
     editingHomework = false;
+    editingAudit = false;
     editingTopics = true;
     const subjectOptions = [...new Set(scheduleData.map(item => item.subject).filter(Boolean))]
         .sort((a, b) => shortSubject(a).localeCompare(shortSubject(b), "ru"));
@@ -402,6 +412,33 @@ function renderTopicEditor() {
             <label><input type="checkbox" id="newTopicMulti"> Несколько выступающих</label>
         </div>
         <button class="btn btn-primary" onclick="createTopic()">Добавить тему</button>
+        <div class="draft-panel">
+            <h4>Массовое добавление через черновик</h4>
+            <p class="draft-help">Вставьте темы построчно. Предмет, срок и доступность применятся ко всему списку.</p>
+            <label class="form-label" for="draftTopicTitles">Названия тем — по одной в строке</label>
+            <textarea class="form-control" id="draftTopicTitles" maxlength="10000" rows="7" placeholder="1. Первая тема\n2. Вторая тема\n3. Третья тема"></textarea>
+            <div class="admin-create-grid">
+                <div><label class="form-label" for="draftTopicSubject">Предмет</label>
+                <select class="form-control" id="draftTopicSubject">${selectOptions("")}</select></div>
+                <div><label class="form-label" for="draftTopicDeadline">Срок, необязательно</label>
+                <input class="form-control" type="date" id="draftTopicDeadline"></div>
+                <div><label class="form-label" for="draftTopicGroup">Группа</label>
+                <select class="form-control" id="draftTopicGroup">${groupOptions("МН-4-25-01")}</select></div>
+                <label><input type="checkbox" id="draftTopicCommon" onchange="syncTopicScope('draftTopic')"> Общий доклад</label>
+                <label><input type="checkbox" id="draftTopicMulti"> Несколько выступающих</label>
+            </div>
+            <button class="btn btn-outline" onclick="addTopicDrafts()">Добавить список в черновик</button>
+            ${adminTopicDrafts.length ? `<div class="draft-list">${adminTopicDrafts.map(item => `
+                <div class="draft-item"><div><strong>${escapeHtml(item.title)}</strong>
+                <span>${escapeHtml(shortSubject(item.subject))} · ${escapeHtml(item.isCommon ? "Для всех" : item.group)}${item.deadline ? ` · ${escapeHtml(item.deadline)}` : ""}</span></div>
+                <button class="btn btn-danger btn-small" onclick="deleteTopicDraft(${item.id})">Убрать</button></div>`).join("")}</div>
+                <h4>Предварительный просмотр рассылки</h4>
+                <pre class="notification-preview">${escapeHtml(topicDraftPreview())}</pre>
+                <div class="admin-actions">
+                    <button class="btn btn-primary" onclick="publishTopicDrafts()">Опубликовать ${adminTopicDrafts.length} тем</button>
+                    <button class="btn btn-secondary" onclick="clearTopicDrafts()">Очистить черновик</button>
+                </div>` : '<div class="empty-state compact">Черновик пуст. Он сохраняется после закрытия приложения.</div>'}
+        </div>
         <div class="admin-records">${adminTopics.map(topic => `<article class="admin-record ${topic.active ? "" : "archived"}">
             <div class="admin-record-heading"><strong>№${topic.id}</strong><span>${topic.active ? "Активна" : "В архиве"}</span></div>
             <label class="form-label" for="topic-title-${topic.id}">Название</label>
@@ -433,12 +470,13 @@ function syncTopicScope(prefix) {
 }
 
 function topicScopePayload(prefix) {
-    const suffix = prefix === "newTopic" ? "" : prefix;
-    const common = document.getElementById(prefix === "newTopic" ? "newTopicCommon" : `topic-common-${suffix}`).checked;
+    const formPrefix = prefix === "newTopic" || prefix === "draftTopic";
+    const suffix = formPrefix ? "" : prefix;
+    const common = document.getElementById(formPrefix ? `${prefix}Common` : `topic-common-${suffix}`).checked;
     return {
         isCommon: common,
-        isMulti: document.getElementById(prefix === "newTopic" ? "newTopicMulti" : `topic-multi-${suffix}`).checked,
-        group: common ? "" : document.getElementById(prefix === "newTopic" ? "newTopicGroup" : `topic-group-${suffix}`).value
+        isMulti: document.getElementById(formPrefix ? `${prefix}Multi` : `topic-multi-${suffix}`).checked,
+        group: common ? "" : document.getElementById(formPrefix ? `${prefix}Group` : `topic-group-${suffix}`).value
     };
 }
 
@@ -453,6 +491,44 @@ async function createTopic() {
     const payload = {action: "create_topic", title, subject, ...topicScopePayload("newTopic")};
     if (deadline) payload.deadline = deadline;
     if (await performAction(payload)) renderTopicEditor();
+}
+
+function topicDraftPreview() {
+    const heading = adminTopicDrafts.length === 1 ? "📚 Добавлена новая тема доклада"
+        : `📚 Добавлены новые темы докладов: ${adminTopicDrafts.length}`;
+    const rows = adminTopicDrafts.map((item, index) => {
+        const scope = item.isCommon ? "Общий доклад" : `Группа: ${item.group}`;
+        return `${index + 1}. ${item.title}\nПредмет: ${item.subject}\n${scope}${item.deadline ? `\nСрок: ${item.deadline}` : ""}`;
+    });
+    return `${heading}\n\n${rows.join("\n\n")}`;
+}
+
+async function addTopicDrafts() {
+    const titles = document.getElementById("draftTopicTitles").value.split(/\r?\n/)
+        .map(line => line.replace(/^\s*(?:\d+[.)]|[-–—•])\s*/, "").trim()).filter(Boolean);
+    const subject = document.getElementById("draftTopicSubject").value.trim();
+    const deadline = apiDate(document.getElementById("draftTopicDeadline").value);
+    if (!titles.length) { showStatus("Добавьте названия тем построчно."); return; }
+    if (titles.length > 50) { showStatus("За один раз можно добавить до 50 тем."); return; }
+    if (!subject) { showStatus("Укажите предмет для списка тем."); return; }
+    const payload = {action: "add_topic_drafts", titles, subject, ...topicScopePayload("draftTopic")};
+    if (deadline) payload.deadline = deadline;
+    if (await performAction(payload)) renderTopicEditor();
+}
+
+async function deleteTopicDraft(draftId) {
+    if (await performAction({action: "delete_topic_draft", draftId})) renderTopicEditor();
+}
+
+async function clearTopicDrafts() {
+    if (!window.confirm("Очистить весь черновик тем?")) return;
+    if (await performAction({action: "clear_topic_drafts"})) renderTopicEditor();
+}
+
+async function publishTopicDrafts() {
+    if (!adminTopicDrafts.length) return;
+    if (!window.confirm(`Опубликовать тем: ${adminTopicDrafts.length}? Пользователи получат одну подборку.`)) return;
+    if (await performAction({action: "publish_topic_drafts"})) renderTopicEditor();
 }
 
 async function saveTopic(topicId) {
@@ -523,6 +599,7 @@ function renderScheduleEditor() {
     if (!isAdmin) return;
     editingTopics = false;
     editingHomework = false;
+    editingAudit = false;
     editingSchedule = true;
     const todayStart = calendarTime(studyToday());
     const lessons = [...adminLessons].sort((a, b) => {
@@ -606,6 +683,7 @@ function renderHomeworkEditor() {
     editingProfile = false;
     editingTopics = false;
     editingSchedule = false;
+    editingAudit = false;
     editingHomework = true;
     document.getElementById("cabinetContent").innerHTML = `<div class="profile-card card admin-editor">
         <h3 class="section-title">Управление домашкой</h3>
@@ -633,6 +711,28 @@ function renderHomeworkEditor() {
             </div></details>`).join("") : `<div class="empty-state">Домашних заданий пока нет.</div>`}</div>
         <button class="btn btn-secondary" onclick="closeHomeworkEditor()">Вернуться в кабинет</button></div>`;
 }
+
+function renderAuditLog() {
+    if (!isAdmin) return;
+    editingProfile = false;
+    editingTopics = false;
+    editingSchedule = false;
+    editingHomework = false;
+    editingAudit = true;
+    const actionNames = {create: "Создание", update: "Изменение", delete: "Удаление",
+        archive: "Архив", restore: "Восстановление", deadline: "Срок",
+        cancel_booking: "Бронирование", publish: "Публикация"};
+    document.getElementById("cabinetContent").innerHTML = `<div class="profile-card card admin-editor">
+        <h3 class="section-title">История действий</h3>
+        <p class="draft-help">Последние действия администраторов. Хранится до 300 записей.</p>
+        <div class="audit-list">${adminAuditLog.length ? adminAuditLog.map(item => `<article class="audit-item">
+            <div><strong>${escapeHtml(actionNames[item.action] || item.action)}</strong><span>${escapeHtml(item.actor)}</span></div>
+            <p>${escapeHtml(item.summary)}</p><time>${escapeHtml(new Date(item.createdAt).toLocaleString("ru-RU"))}</time>
+        </article>`).join("") : '<div class="empty-state">История пока пуста.</div>'}</div>
+        <button class="btn btn-secondary" onclick="closeAuditLog()">Вернуться в кабинет</button></div>`;
+}
+
+function closeAuditLog() { editingAudit = false; renderCabinet(); }
 
 function assignmentPayload(prefix) {
     return {

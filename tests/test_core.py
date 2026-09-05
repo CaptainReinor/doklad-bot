@@ -205,7 +205,7 @@ def test_v7_migration_preserves_cross_group_bookings_and_locks_topic(tmp_path):
     topic = db.get_topic(1)
     assert topic['is_common'] is True and topic['is_multi'] is False
     assert len(db.get_all_bookings()) == 2
-    assert sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0] == 9
+    assert sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0] == 10
 
 
 def test_db_location_does_not_follow_cwd(db, monkeypatch, tmp_path):
@@ -364,6 +364,40 @@ def test_multiple_admins_can_manage_topics(db):
                                 'subject': 'Управление бизнес-процессами'})
     assert service.state(842525310)['isAdmin'] is True
     assert service.catalog()['topics'][-1]['subject'] == 'Управление бизнес-процессами'
+
+
+def test_persistent_bulk_topic_draft_preview_publication_and_audit(service):
+    register(service, 1, 'МН-4-25-01')
+    register(service, 2, 'МН-4-25-02')
+    payload = {'action': 'add_topic_drafts',
+               'titles': ['Черновик первой темы', 'Черновик второй темы'],
+               'subject': 'Управление бизнес-процессами', 'deadline': '30.09.2026',
+               'isCommon': False, 'isMulti': False, 'group': 'МН-4-25-01'}
+    with pytest.raises(ActionError) as forbidden:
+        service.perform(1, payload)
+    assert forbidden.value.status == 403
+
+    service.perform(ADMIN, payload)
+    state = service.state(ADMIN)
+    assert [item['title'] for item in state['topicDrafts']] == payload['titles']
+    assert not any(item['title'].startswith('Черновик') for item in service.catalog()['topics'])
+
+    service.perform(ADMIN, {'action': 'publish_topic_drafts'})
+    assert service.state(ADMIN)['topicDrafts'] == []
+    published = [item for item in service.catalog(1, public=True)['topics']
+                 if item['title'].startswith('Черновик')]
+    assert len(published) == 2 and all(item['deadline'] == '30.09.2026' for item in published)
+    assert not any(item['title'].startswith('Черновик')
+                   for item in service.catalog(2, public=True)['topics'])
+    assert service.state(ADMIN)['auditLog'][0]['summary'] == 'Опубликовано тем: 2'
+
+    with service.db.connection() as conn:
+        conn.execute("UPDATE notification_jobs SET next_attempt=0 WHERE event_key LIKE 'topic-added:%'")
+    sent = []
+    check_notifications(service, lambda user_id, text: sent.append((user_id, text)))
+    student_messages = [text for user_id, text in sent if user_id == 1 and 'Добавлены новые темы' in text]
+    assert len(student_messages) == 1
+    assert all(title in student_messages[0] for title in payload['titles'])
 
 
 def test_new_deadline_drives_reminder_and_cancels_old_job(service):
