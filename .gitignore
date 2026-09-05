@@ -1,0 +1,13 @@
+config.py
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+*.db
+*.db-*
+*.bak
+node_modules/
+browser-test-results/
+

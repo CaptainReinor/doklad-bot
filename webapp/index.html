@@ -1,0 +1,1632 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>Студенческий помощник</title>
+
+    <script src="telegram-web-app.js?v=20260905-2"></script>
+    <script src="html2pdf.bundle.min.js?v=20260905-2"></script>
+
+    <style>
+        :root {
+            --page-bg: var(--tg-theme-bg-color, #f5f7fb);
+            --card-bg: var(--tg-theme-secondary-bg-color, #ffffff);
+            --text: var(--tg-theme-text-color, #172033);
+            --hint: var(--tg-theme-hint-color, #7c8799);
+            --button: var(--tg-theme-button-color, #2481cc);
+            --button-text: var(--tg-theme-button-text-color, #ffffff);
+            --link: var(--tg-theme-link-color, #2481cc);
+
+            --green: #22a06b;
+            --red: #e55353;
+            --orange: #e88a16;
+            --purple: #7c5cff;
+            --blue: #2481cc;
+
+            --border: rgba(100, 116, 139, 0.14);
+            --shadow: 0 8px 28px rgba(31, 41, 55, 0.07);
+            --radius: 18px;
+        }
+
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background:
+                radial-gradient(
+                    circle at 0% 0%,
+                    rgba(36, 129, 204, 0.09),
+                    transparent 30%
+                ),
+                radial-gradient(
+                    circle at 100% 15%,
+                    rgba(124, 92, 255, 0.07),
+                    transparent 28%
+                ),
+                var(--page-bg);
+            color: var(--text);
+            font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            font-size: 15px;
+            line-height: 1.45;
+            overflow-x: hidden;
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 3px;
+            background: linear-gradient(
+                90deg,
+                var(--button),
+                var(--purple),
+                var(--green)
+            );
+            z-index: 9999;
+        }
+
+        button,
+        input,
+        select,
+        textarea {
+            font: inherit;
+        }
+
+        button {
+            cursor: pointer;
+        }
+
+        .app {
+            width: min(1040px, 100%);
+            margin: 0 auto;
+            padding: 14px 18px 40px;
+        }
+
+        /* HEADER */
+
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 14px 4px 20px;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 13px;
+            min-width: 0;
+        }
+
+        .brand-avatar {
+            width: 48px;
+            height: 48px;
+            flex: 0 0 48px;
+            display: grid;
+            place-items: center;
+            border-radius: 15px;
+            background: linear-gradient(
+                135deg,
+                rgba(36, 129, 204, 0.16),
+                rgba(124, 92, 255, 0.14)
+            );
+            font-size: 25px;
+            box-shadow: inset 0 0 0 1px rgba(36, 129, 204, 0.08);
+        }
+
+        .brand-text {
+            min-width: 0;
+        }
+
+        .brand-title {
+            margin: 0;
+            font-size: clamp(18px, 3vw, 23px);
+            font-weight: 750;
+            letter-spacing: -0.4px;
+        }
+
+        .brand-subtitle {
+            margin-top: 3px;
+            color: var(--hint);
+            font-size: 12px;
+        }
+
+        .header-month {
+            flex: 0 0 auto;
+            padding: 8px 12px;
+            border-radius: 12px;
+            background: rgba(127, 127, 127, 0.08);
+            color: var(--hint);
+            font-size: 12px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        /* TABS */
+
+        .tabs-wrap {
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            margin: 0 -18px 22px;
+            padding: 8px 18px;
+            background: color-mix(
+                in srgb,
+                var(--page-bg) 88%,
+                transparent
+            );
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .tabs {
+            display: flex;
+            gap: 7px;
+            overflow-x: auto;
+            scrollbar-width: none;
+            padding-bottom: 2px;
+        }
+
+        .tabs::-webkit-scrollbar {
+            display: none;
+        }
+
+        .tab {
+            flex: 0 0 auto;
+            border: 0;
+            border-radius: 12px;
+            padding: 10px 13px;
+            background: transparent;
+            color: var(--hint);
+            font-size: 13px;
+            font-weight: 600;
+            white-space: nowrap;
+            transition: 0.2s ease;
+        }
+
+        .tab:hover {
+            background: rgba(127, 127, 127, 0.07);
+        }
+
+        .tab.active {
+            background: var(--button);
+            color: var(--button-text);
+            box-shadow: 0 5px 16px rgba(36, 129, 204, 0.2);
+        }
+
+        /* CONTENT */
+
+        .tab-content {
+            display: none;
+            animation: fadeIn 0.22s ease;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(4px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .section-title {
+            margin: 0 0 5px;
+            font-size: 20px;
+            font-weight: 750;
+            letter-spacing: -0.35px;
+        }
+
+        .section-subtitle {
+            margin: 0 0 18px;
+            color: var(--hint);
+            font-size: 13px;
+        }
+
+        /* CARDS */
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+        }
+
+        /* STATS */
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+
+        .stat-card {
+            position: relative;
+            min-height: 98px;
+            padding: 16px;
+            overflow: hidden;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+        }
+
+        .stat-card::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 4px;
+            height: 100%;
+            background: var(--button);
+            border-radius: 4px;
+        }
+
+        .stat-card:nth-child(2)::before {
+            background: var(--green);
+        }
+
+        .stat-card:nth-child(3)::before {
+            background: var(--purple);
+        }
+
+        .stat-card .number {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 25px;
+            line-height: 1;
+            font-weight: 750;
+        }
+
+        .stat-card .label {
+            color: var(--hint);
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .number.blue {
+            color: var(--blue);
+        }
+
+        .number.green {
+            color: var(--green);
+        }
+
+        .number.purple {
+            color: var(--purple);
+        }
+
+        /* FILTERS */
+
+        .filters {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 15px;
+            overflow-x: auto;
+            scrollbar-width: none;
+            padding-bottom: 3px;
+        }
+
+        .filters::-webkit-scrollbar {
+            display: none;
+        }
+
+        .filter-btn {
+            flex: 0 0 auto;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: var(--card-bg);
+            color: var(--hint);
+            padding: 8px 13px;
+            font-size: 12px;
+            font-weight: 600;
+            transition: 0.2s ease;
+        }
+
+        .filter-btn.active {
+            color: var(--button-text);
+            background: var(--button);
+            border-color: var(--button);
+        }
+
+        /* SCHEDULE */
+
+        .schedule-container {
+            display: grid;
+            gap: 12px;
+        }
+
+        .schedule-card {
+            position: relative;
+            padding: 16px;
+            overflow: hidden;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+        }
+
+        .schedule-card::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 4px;
+            background: var(--button);
+        }
+
+        .schedule-card.done::before {
+            background: var(--green);
+        }
+
+        .homework-description {
+            margin: 12px 0;
+            white-space: pre-line;
+            line-height: 1.5;
+        }
+
+        .schedule-card.today {
+            border-color: var(--red);
+            background: color-mix(in srgb, var(--red) 9%, var(--card-bg));
+        }
+
+        .schedule-card.today::before {
+            background: var(--red);
+        }
+
+        .schedule-card.today .date-box {
+            background: color-mix(in srgb, var(--red) 15%, transparent);
+            color: var(--red);
+        }
+
+        .next-lesson-label {
+            display: inline-flex;
+            margin: -3px 0 12px;
+            padding: 5px 9px;
+            border-radius: 999px;
+            background: color-mix(in srgb, var(--button) 12%, transparent);
+            color: var(--button);
+            font-size: 11px;
+            font-weight: 700;
+        }
+
+        .lesson-link-button {
+            display: flex;
+            width: 100%;
+            margin-top: 12px;
+            text-decoration: none;
+        }
+
+        .schedule-top {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .schedule-date {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .date-box {
+            min-width: 50px;
+            padding: 7px 8px;
+            border-radius: 11px;
+            text-align: center;
+            background: rgba(36, 129, 204, 0.1);
+            color: var(--button);
+        }
+
+        .date-box .day {
+            display: block;
+            font-size: 17px;
+            font-weight: 750;
+            line-height: 1;
+        }
+
+        .date-box .month {
+            display: block;
+            margin-top: 3px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .weekday {
+            color: var(--hint);
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .time {
+            padding: 7px 10px;
+            border-radius: 9px;
+            background: rgba(127, 127, 127, 0.08);
+            font-size: 12px;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .schedule-subject {
+            margin-bottom: 12px;
+            font-size: 16px;
+            font-weight: 700;
+            line-height: 1.35;
+        }
+
+        .schedule-info {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .info-item {
+            min-width: 0;
+            padding: 9px 10px;
+            border-radius: 11px;
+            background: rgba(127, 127, 127, 0.055);
+        }
+
+        .info-item .label {
+            display: block;
+            margin-bottom: 2px;
+            color: var(--hint);
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        .info-item .value {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            overflow-wrap: anywhere;
+        }
+
+        .type-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 5px 8px;
+            border-radius: 8px;
+            background: rgba(124, 92, 255, 0.1);
+            color: var(--purple);
+            font-size: 10px;
+            font-weight: 700;
+        }
+
+        .empty-state {
+            padding: 40px 20px;
+            text-align: center;
+            color: var(--hint);
+            background: var(--card-bg);
+            border: 1px dashed var(--border);
+            border-radius: var(--radius);
+        }
+
+        .empty-state .icon {
+            margin-bottom: 8px;
+            font-size: 32px;
+        }
+
+        /* PROGRESS */
+
+        .progress-card {
+            padding: 16px;
+            margin: 16px 0;
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 9px;
+            font-size: 12px;
+            font-weight: 650;
+        }
+
+        .progress-track {
+            height: 8px;
+            overflow: hidden;
+            border-radius: 999px;
+            background: rgba(127, 127, 127, 0.1);
+        }
+
+        .progress-bar {
+            height: 100%;
+            width: 0;
+            border-radius: inherit;
+            background: linear-gradient(
+                90deg,
+                var(--button),
+                var(--purple)
+            );
+            transition: width 0.35s ease;
+        }
+
+        /* BUTTONS */
+
+        .btn {
+            width: 100%;
+            min-height: 44px;
+            border: 0;
+            border-radius: 12px;
+            padding: 11px 15px;
+            font-size: 13px;
+            font-weight: 700;
+            transition:
+                transform 0.15s ease,
+                opacity 0.15s ease,
+                background 0.15s ease;
+        }
+
+        .btn:active {
+            transform: scale(0.985);
+        }
+
+        .btn-primary {
+            background: var(--button);
+            color: var(--button-text);
+            box-shadow: 0 5px 15px rgba(36, 129, 204, 0.17);
+        }
+
+        .btn-secondary {
+            background: rgba(127, 127, 127, 0.08);
+            color: var(--text);
+        }
+
+        .btn-danger {
+            background: rgba(229, 83, 83, 0.1);
+            color: var(--red);
+        }
+
+        .btn-outline {
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text);
+        }
+
+        .btn + .btn {
+            margin-top: 8px;
+        }
+
+        /* REPORTS / TOPICS */
+
+        .topics-list {
+            display: grid;
+            gap: 11px;
+        }
+
+        .topic-card {
+            padding: 15px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+        }
+
+        .topic-number {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 27px;
+            height: 27px;
+            margin-bottom: 9px;
+            border-radius: 9px;
+            background: rgba(124, 92, 255, 0.1);
+            color: var(--purple);
+            font-size: 12px;
+            font-weight: 750;
+        }
+
+        .topic-title {
+            margin-bottom: 13px;
+            font-size: 14px;
+            font-weight: 650;
+            line-height: 1.4;
+        }
+
+        .topic-card.booked {
+            border-color: rgba(34, 160, 107, 0.25);
+            background: linear-gradient(
+                135deg,
+                var(--card-bg),
+                rgba(34, 160, 107, 0.04)
+            );
+        }
+
+        .topic-status {
+            margin-bottom: 10px;
+            color: var(--green);
+            font-size: 11px;
+            font-weight: 700;
+        }
+
+        /* BOOKINGS */
+
+        .booking-list {
+            display: grid;
+            gap: 10px;
+        }
+
+        .booking-item {
+            padding: 14px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 15px;
+        }
+
+        .booking-title {
+            margin-bottom: 6px;
+            font-weight: 700;
+            font-size: 14px;
+        }
+
+        .booking-meta {
+            margin-bottom: 11px;
+            color: var(--hint);
+            font-size: 12px;
+        }
+
+        .booking-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .booking-actions .btn {
+            width: auto;
+            flex: 1;
+        }
+
+        /* NOTIFICATIONS */
+
+        .notification-list {
+            display: grid;
+            gap: 10px;
+        }
+
+        .notification-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            padding: 14px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 15px;
+        }
+
+        .notification-info {
+            min-width: 0;
+        }
+
+        .notification-title {
+            margin-bottom: 3px;
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .notification-description {
+            color: var(--hint);
+            font-size: 11px;
+            line-height: 1.35;
+        }
+
+        .switch {
+            position: relative;
+            flex: 0 0 46px;
+            width: 46px;
+            height: 27px;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            inset: 0;
+            border-radius: 999px;
+            background: rgba(127, 127, 127, 0.2);
+            transition: 0.2s ease;
+        }
+
+        .slider::before {
+            content: "";
+            position: absolute;
+            width: 21px;
+            height: 21px;
+            left: 3px;
+            top: 3px;
+            border-radius: 50%;
+            background: #fff;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.18);
+            transition: 0.2s ease;
+        }
+
+        .switch input:checked + .slider {
+            background: var(--button);
+        }
+
+        .switch input:checked + .slider::before {
+            transform: translateX(19px);
+        }
+
+        /* QUEUE */
+
+        .queue-card {
+            padding: 18px;
+            text-align: center;
+        }
+
+        .queue-icon {
+            margin-bottom: 8px;
+            font-size: 35px;
+        }
+
+        .queue-number {
+            font-size: 42px;
+            line-height: 1;
+            font-weight: 750;
+        }
+
+        .queue-label {
+            margin: 7px 0 17px;
+            color: var(--hint);
+            font-size: 12px;
+        }
+
+        .queue-stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-top: 15px;
+        }
+
+        .queue-stat {
+            padding: 11px 7px;
+            border-radius: 11px;
+            background: rgba(127, 127, 127, 0.06);
+        }
+
+        .queue-stat strong {
+            display: block;
+            font-size: 18px;
+        }
+
+        .queue-stat span {
+            color: var(--hint);
+            font-size: 10px;
+        }
+
+        /* PROFILE / FORMS */
+
+        .profile-card {
+            padding: 18px;
+            margin-bottom: 14px;
+        }
+
+        .profile-header {
+            display: flex;
+            align-items: center;
+            gap: 13px;
+            margin-bottom: 18px;
+        }
+
+        .profile-avatar {
+            width: 52px;
+            height: 52px;
+            display: grid;
+            place-items: center;
+            flex: 0 0 52px;
+            border-radius: 16px;
+            background: rgba(36, 129, 204, 0.1);
+            font-size: 25px;
+        }
+
+        .profile-name {
+            font-size: 17px;
+            font-weight: 750;
+        }
+
+        .profile-status {
+            margin-top: 3px;
+            color: var(--green);
+            font-size: 11px;
+            font-weight: 650;
+        }
+
+        .form-group {
+            margin-bottom: 13px;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 6px;
+            color: var(--hint);
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .form-control {
+            width: 100%;
+            min-height: 45px;
+            border: 1px solid var(--border);
+            outline: none;
+            border-radius: 12px;
+            padding: 11px 12px;
+            background: var(--page-bg);
+            color: var(--text);
+        }
+
+        .form-control:focus {
+            border-color: var(--button);
+            box-shadow: 0 0 0 3px rgba(36, 129, 204, 0.1);
+        }
+
+        /* STATUS */
+
+        #status {
+            position: fixed;
+            left: 50%;
+            bottom: 18px;
+            z-index: 1000;
+            width: min(500px, calc(100% - 30px));
+            padding: 12px 15px;
+            border-radius: 13px;
+            background: var(--text);
+            color: var(--page-bg);
+            text-align: center;
+            font-size: 12px;
+            font-weight: 600;
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.18);
+            transform: translate(-50%, 120px);
+            opacity: 0;
+            pointer-events: none;
+            transition: 0.25s ease;
+        }
+
+        #status.show {
+            transform: translate(-50%, 0);
+            opacity: 1;
+        }
+
+        hr {
+            margin: 20px 0;
+            border: 0;
+            border-top: 1px solid var(--border);
+        }
+
+        .muted {
+            color: var(--hint);
+        }
+
+        .text-center {
+            text-align: center;
+        }
+
+        .mt-12 {
+            margin-top: 12px;
+        }
+
+        .mb-12 {
+            margin-bottom: 12px;
+        }
+
+        /* DESKTOP */
+
+        @media (min-width: 901px) {
+            .app {
+                padding-top: 22px;
+            }
+
+            .schedule-container {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .topics-list {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .booking-list {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .notification-list {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+
+        /* TABLET */
+
+        @media (min-width: 601px) and (max-width: 900px) {
+            .schedule-container {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .topics-list {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+
+        /* MOBILE */
+
+        @media (max-width: 600px) {
+            .app {
+                padding: 10px 12px 30px;
+            }
+
+            .header {
+                padding: 10px 2px 15px;
+            }
+
+            .brand-avatar {
+                width: 43px;
+                height: 43px;
+                flex-basis: 43px;
+                border-radius: 13px;
+                font-size: 22px;
+            }
+
+            .brand-title {
+                font-size: 18px;
+            }
+
+            .header-month {
+                padding: 7px 9px;
+                font-size: 10px;
+            }
+
+            .tabs-wrap {
+                margin-left: -12px;
+                margin-right: -12px;
+                padding-left: 12px;
+                padding-right: 12px;
+            }
+
+            .tabs {
+                gap: 5px;
+            }
+
+            .tab {
+                padding: 9px 11px;
+                font-size: 11px;
+            }
+
+            .stats-grid {
+                gap: 8px;
+            }
+
+            .stat-card {
+                min-height: 85px;
+                padding: 12px;
+            }
+
+            .stat-card .number {
+                font-size: 21px;
+            }
+
+            .stat-card .label {
+                font-size: 10px;
+            }
+
+            .schedule-card {
+                padding: 13px;
+            }
+
+            .schedule-top {
+                gap: 7px;
+            }
+
+            .schedule-info {
+                grid-template-columns: 1fr;
+            }
+
+            .schedule-subject {
+                font-size: 14px;
+            }
+
+            .date-box {
+                min-width: 45px;
+            }
+
+            .time {
+                font-size: 10px;
+                padding: 6px 7px;
+            }
+
+            .queue-stats {
+                gap: 5px;
+            }
+
+            .queue-stat {
+                padding: 9px 4px;
+            }
+
+            .queue-number {
+                font-size: 38px;
+            }
+
+            .booking-actions {
+                flex-direction: column;
+            }
+
+            .notification-item {
+                padding: 12px;
+            }
+        }
+
+        /* VERY SMALL PHONES */
+
+        @media (max-width: 360px) {
+            .brand-subtitle {
+                display: none;
+            }
+
+            .header-month {
+                display: none;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .stat-card {
+                min-height: 70px;
+            }
+
+            .queue-stats {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* DARK MODE FALLBACK */
+
+        @media (prefers-color-scheme: dark) {
+            body {
+                background:
+                    radial-gradient(
+                        circle at 0% 0%,
+                        rgba(36, 129, 204, 0.12),
+                        transparent 30%
+                    ),
+                    var(--page-bg);
+            }
+
+            .slider::before {
+                background: #f5f5f5;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *,
+            *::before,
+            *::after {
+                scroll-behavior: auto !important;
+                animation-duration: 0.01ms !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+    
+        .connection-status { padding: 10px 16px; text-align: center; font-size: 13px; background: #eff6ff; color: #1e40af; overflow-wrap: anywhere; }
+        .connection-status.error { background: #fff4e5; color: #804500; }
+        .booking-owner { font-size: 13px; margin: 8px 0; color: var(--hint); overflow-wrap: anywhere; }
+        .form-label { display: block; }
+        .admin-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+        .admin-create-grid, .lesson-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 12px 0; }
+        .lesson-fields .wide { grid-column: 1 / -1; }
+        .admin-records { display: grid; gap: 12px; margin: 18px 0; }
+        .admin-record { padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card-bg); }
+        .admin-record.archived { opacity: .72; border-style: dashed; }
+        .admin-record summary { cursor: pointer; font-weight: 650; overflow-wrap: anywhere; }
+        .admin-record-heading, .admin-booking { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
+        .deadline-control-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+        .admin-bookings { display: grid; gap: 8px; margin: 12px 0; color: var(--hint); }
+        .btn-small { padding: 7px 10px; font-size: 12px; }
+        .topic-title, .profile-name, .value { overflow-wrap: anywhere; }
+        button:disabled { opacity: .55; cursor: not-allowed; }
+        @media (max-width: 560px) {
+            .admin-create-grid, .lesson-fields { grid-template-columns: 1fr; }
+            .lesson-fields .wide { grid-column: auto; }
+            .admin-booking { align-items: flex-start; flex-direction: column; }
+            .deadline-control-row { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+
+<body>
+<div id="connectionStatus" class="connection-status" role="status">Загружаем данные…</div>
+
+<div class="app">
+
+    <!-- HEADER -->
+    <header class="header">
+        <div class="brand">
+            <div class="brand-avatar">🎓</div>
+
+            <div class="brand-text">
+                <h1 class="brand-title">Учебный центр</h1>
+                <div class="brand-subtitle">
+                    Студенческий помощник
+                </div>
+            </div>
+        </div>
+
+        <div class="header-month">
+            Сентябрь 2026
+        </div>
+    </header>
+
+    <!-- TABS -->
+    <div class="tabs-wrap">
+        <nav class="tabs">
+            <button
+                class="tab active"
+                data-tab="schedule"
+                onclick="switchTab('schedule')"
+            >
+                📅 Расписание
+            </button>
+
+            <button
+                class="tab"
+                data-tab="homework"
+                onclick="switchTab('homework')"
+            >
+                📝 Домашка
+            </button>
+
+            <button
+                class="tab"
+                data-tab="reports"
+                onclick="switchTab('reports')"
+            >
+                📚 Доклады
+            </button>
+
+            <button
+                class="tab"
+                data-tab="cabinet"
+                onclick="switchTab('cabinet')"
+            >
+                👤 Кабинет
+            </button>
+
+            <button
+                class="tab"
+                data-tab="notifications"
+                onclick="switchTab('notifications')"
+            >
+                🔔 Уведомления
+            </button>
+
+            <button
+                class="tab"
+                data-tab="queue"
+                onclick="switchTab('queue')"
+            >
+                👥 Бронирования
+            </button>
+        </nav>
+    </div>
+
+
+    <!-- ==================== РАСПИСАНИЕ ==================== -->
+
+    <section
+        id="schedule"
+        class="tab-content active"
+    >
+        <h2 class="section-title">
+            📅 Расписание
+        </h2>
+
+        <p class="section-subtitle">
+            Занятия группы МН-4-25-01
+        </p>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <span
+                    class="number blue"
+                    id="totalClasses"
+                >
+                    0
+                </span>
+
+                <span class="label">
+                    Всего занятий
+                </span>
+            </div>
+
+            <div class="stat-card">
+                <span
+                    class="number green"
+                    id="completedClasses"
+                >
+                    0
+                </span>
+
+                <span class="label">
+                    Проведено
+                </span>
+            </div>
+
+            <div class="stat-card">
+                <span
+                    class="number purple"
+                    id="remainingClasses"
+                >
+                    0
+                </span>
+
+                <span class="label">
+                    Осталось
+                </span>
+            </div>
+        </div>
+
+        <div class="filters">
+            <button
+                class="filter-btn active"
+                data-filter="upcoming"
+            >
+                Предстоящие
+            </button>
+
+            <button
+                class="filter-btn"
+                data-filter="Л"
+            >
+                Лекции
+            </button>
+
+            <button
+                class="filter-btn"
+                data-filter="ПЗ"
+            >
+                Практика
+            </button>
+
+            <button
+                class="filter-btn"
+                data-filter="past"
+            >
+                Прошедшие
+            </button>
+        </div>
+
+        <div
+            id="scheduleContainer"
+            class="schedule-container"
+        ></div>
+
+        <div class="progress-card card">
+            <div class="progress-header">
+                <span>Прогресс по расписанию</span>
+
+                <span id="scheduleProgress">
+                    0%
+                </span>
+            </div>
+
+            <div class="progress-track">
+                <div
+                    id="scheduleProgressBar"
+                    class="progress-bar"
+                ></div>
+            </div>
+        </div>
+
+        <button
+            class="btn btn-primary"
+            onclick="downloadSchedule()"
+        >
+            📄 Скачать расписание PDF
+        </button>
+    </section>
+
+
+    <!-- ==================== ДОМАШКА ==================== -->
+
+    <section
+        id="homework"
+        class="tab-content"
+    >
+        <h2 class="section-title">
+            📝 Домашка
+        </h2>
+
+        <p class="section-subtitle">
+            Актуальные задания, описание и срок сдачи
+        </p>
+
+        <div id="homeworkContainer" class="topics-list"></div>
+    </section>
+
+
+    <!-- ==================== ДОКЛАДЫ ==================== -->
+
+    <section
+        id="reports"
+        class="tab-content"
+    >
+        <h2 class="section-title">
+            📚 Доклады
+        </h2>
+
+        <p class="section-subtitle">
+            Выберите тему доклада и проверьте, к какому предмету она относится
+        </p>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <span
+                    class="number blue"
+                    id="topicsCount"
+                >
+                    10
+                </span>
+
+                <span class="label">
+                    Тем в списке
+                </span>
+            </div>
+
+            <div class="stat-card">
+                <span
+                    class="number green"
+                    id="bookedTopicsCount"
+                >
+                    0
+                </span>
+
+                <span class="label">
+                    Занято тем
+                </span>
+            </div>
+
+            <div class="stat-card">
+                <span
+                    class="number purple"
+                    id="availableTopicsCount"
+                >
+                    10
+                </span>
+
+                <span class="label">
+                    Свободно
+                </span>
+            </div>
+        </div>
+
+        <div id="topicSubjectFilters" class="filters subject-filters" aria-label="Предметы докладов"></div>
+
+        <div
+            id="topicsContainer"
+            class="topics-list"
+        ></div>
+
+        <hr>
+
+        <h3
+            class="section-title"
+            style="font-size:17px;"
+        >
+            📋 Мои бронирования
+        </h3>
+
+        <p class="section-subtitle">
+            Выбранные темы докладов
+        </p>
+
+        <div
+            class="stats-grid"
+            style="margin-bottom:12px;"
+        >
+            <div class="stat-card">
+                <span
+                    class="number blue"
+                    id="myBookingsCount"
+                >
+                    0
+                </span>
+
+                <span class="label">
+                    Мои темы
+                </span>
+            </div>
+
+            <div class="stat-card">
+                <span
+                    class="number green"
+                    id="myProgress"
+                >
+                    0%
+                </span>
+
+                <span class="label">
+                    Прогресс
+                </span>
+            </div>
+
+            <div class="stat-card">
+                <span class="number purple" id="myDeadline">
+                    —
+                </span>
+
+                <span class="label">
+                    Дедлайн
+                </span>
+            </div>
+        </div>
+
+        <div
+            id="myBookingsContainer"
+            class="booking-list"
+        ></div>
+
+        <div class="mt-12">
+            <button
+                class="btn btn-outline"
+                onclick="exportBookings()"
+            >
+                📤 Экспортировать мои темы
+            </button>
+        </div>
+    </section>
+
+
+    <!-- ==================== КАБИНЕТ ==================== -->
+
+    <section
+        id="cabinet"
+        class="tab-content"
+    >
+        <h2 class="section-title">
+            👤 Кабинет
+        </h2>
+
+        <p class="section-subtitle">
+            Личные данные студента
+        </p>
+
+        <div id="cabinetContent"></div>
+    </section>
+
+
+    <!-- ==================== УВЕДОМЛЕНИЯ ==================== -->
+
+    <section
+        id="notifications"
+        class="tab-content"
+    >
+        <h2 class="section-title">
+            🔔 Уведомления
+        </h2>
+
+        <p class="section-subtitle">
+            Настройте уведомления, которые хотите получать
+        </p>
+
+        <div
+            id="notificationsContainer"
+            class="notification-list"
+        ></div>
+    </section>
+
+
+    <!-- ==================== ОЧЕРЕДЬ ==================== -->
+
+    <section
+        id="queue"
+        class="tab-content"
+    >
+        <h2 class="section-title">
+            👥 Бронирования
+        </h2>
+
+        <p class="section-subtitle">
+            Общий список бронирований по группам
+        </p>
+
+        <div class="queue-card card">
+
+            <div class="queue-icon">
+                👥
+            </div>
+
+            <div
+                class="queue-number"
+                id="queueTotal"
+            >
+                0
+            </div>
+
+            <div class="queue-label">
+                студентов выбрали темы
+            </div>
+
+            <div class="queue-stats">
+
+                <div class="queue-stat">
+                    <strong
+                        id="queueBooked"
+                    >
+                        0
+                    </strong>
+
+                    <span>
+                        тем занято
+                    </span>
+                </div>
+
+                <div class="queue-stat">
+                    <strong
+                        id="queueFree"
+                    >
+                        0
+                    </strong>
+
+                    <span>
+                        свободных тем
+                    </span>
+                </div>
+
+                <div class="queue-stat">
+                    <strong id="queueTopicsTotal">
+                        10
+                    </strong>
+
+                    <span>
+                        всего тем
+                    </span>
+                </div>
+
+            </div>
+        </div>
+        <div id="queueList" class="topics-list"></div>
+    </section>
+
+</div>
+
+
+<div id="status" role="status" aria-live="polite"></div>
+
+
+<script src="config.js?v=20260905-2"></script>
+<script src="app.js?v=20260905-2" defer></script>
+
+</body>
+</html>

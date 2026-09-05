@@ -1,0 +1,23 @@
+name: telegram-bot
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: telegram-bot-local:latest
+    container_name: telegram-bot
+    restart: unless-stopped
+    env_file:
+      - deploy/docker.env
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - /opt/telegram-bot/docker-data:/data
+      - /opt/telegram-bot/telegram-bot-project/schedule.db:/legacy/schedule.db:ro
+      - /opt/telegram-bot/telegram-bot-project/config.py:/app/config.py:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
