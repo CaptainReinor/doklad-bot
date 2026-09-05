@@ -1139,8 +1139,11 @@
             }
         }
     
-        .connection-status { padding: 10px 16px; text-align: center; font-size: 13px; background: #eff6ff; color: #1e40af; overflow-wrap: anywhere; }
+        .connection-status { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; padding: 7px 16px; text-align: center; font-size: 13px; background: #eff6ff; color: #1e40af; overflow-wrap: anywhere; }
         .connection-status.error { background: #fff4e5; color: #804500; }
+        .connection-refresh { flex: 0 0 auto; width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid currentColor; border-radius: 9px; background: transparent; color: inherit; font-size: 17px; line-height: 1; }
+        .connection-refresh.loading { animation: refresh-spin .8s linear infinite; }
+        @keyframes refresh-spin { to { transform: rotate(360deg); } }
         .booking-owner { font-size: 13px; margin: 8px 0; color: var(--hint); overflow-wrap: anywhere; }
         .form-label { display: block; }
         .admin-actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -1166,7 +1169,10 @@
 </head>
 
 <body>
-<div id="connectionStatus" class="connection-status" role="status">Загружаем данные…</div>
+<div id="connectionStatus" class="connection-status">
+    <span id="connectionStatusText" role="status" aria-live="polite">Загружаем данные…</span>
+    <button id="refreshButton" class="connection-refresh" type="button" aria-label="Обновить данные" title="Обновить данные" onclick="manualRefresh()">↻</button>
+</div>
 
 <div class="app">
 
@@ -1626,7 +1632,7 @@
 
 
 <script src="config.js?v=20260905-2"></script>
-<script src="app.js?v=20260905-2" defer></script>
+<script src="app.js?v=20260905-3" defer></script>
 
 </body>
 </html>

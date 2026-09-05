@@ -69,8 +69,15 @@ function studyToday() {
 
 function connectionStatus(text, error = false) {
     const el = document.getElementById("connectionStatus");
-    el.textContent = text;
+    const textEl = document.getElementById("connectionStatusText");
+    textEl.textContent = text;
     el.classList.toggle("error", error);
+}
+
+function refreshedAt() {
+    return new Date().toLocaleTimeString("ru-RU", {
+        timeZone: studyTimezone, hour: "2-digit", minute: "2-digit"
+    });
 }
 
 async function api(path, payload) {
@@ -126,7 +133,9 @@ function applyState(data) {
     notificationSettings = data.notifications || {};
     participants = data.participants || 0;
     connected = true;
-    connectionStatus(userData ? `Данные обновлены · ${userData.group_name}` : "Заполните профиль во вкладке «Кабинет».");
+    connectionStatus(userData
+        ? `Обновлено в ${refreshedAt()} · ${userData.group_name}`
+        : `Обновлено в ${refreshedAt()} · заполните профиль во вкладке «Кабинет».`);
 }
 
 function renderAll() {
@@ -146,7 +155,7 @@ function renderAll() {
     if (el) el.textContent = nearest || "—";
 }
 
-async function refreshState() {
+async function refreshState(force = false) {
     if (!tg?.initData || refreshing || busy || document.hidden) return;
     refreshing = true;
     const version = mutationVersion;
@@ -163,6 +172,25 @@ async function refreshState() {
         renderTopics();
         renderNotifications();
     } finally { refreshing = false; }
+}
+
+async function manualRefresh() {
+    const button = document.getElementById("refreshButton");
+    if (refreshing || busy) return;
+    if (!tg?.initData) {
+        window.location.reload();
+        return;
+    }
+    button.disabled = true;
+    button.classList.add("loading");
+    connectionStatus("Обновляем данные…");
+    try {
+        await refreshState(true);
+        if (connected) showStatus("Данные обновлены.");
+    } finally {
+        button.disabled = false;
+        button.classList.remove("loading");
+    }
 }
 
 async function performAction(data) {

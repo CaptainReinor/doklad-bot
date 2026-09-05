@@ -40,6 +40,10 @@ async function main() {
         const a = await pageFor(101);
         const b = await pageFor(102);
         const c = await pageFor(103);
+        await a.getByRole('button', {name:'Обновить данные'}).click();
+        await a.waitForFunction(() => !refreshing);
+        assert.match(await a.locator('#connectionStatusText').textContent(), /Обновлено в \d{2}:\d{2}/);
+        checks.push('Manual refresh reports the time of the latest successful update');
         assert.equal(await a.locator('#totalClasses').textContent(), '44');
         // Fix the browser clock to the morning of a day with two later lessons.
         await a.clock.install({time: new Date('2026-09-05T10:00:00+03:00')});
