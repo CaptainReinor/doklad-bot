@@ -3,6 +3,7 @@ config.py
 venv/
 __pycache__/
 .pytest_cache/
+pytest-cache-files-*/
 .ruff_cache/
 *.pyc
 *.db
@@ -10,4 +11,3 @@ __pycache__/
 *.bak
 node_modules/
 browser-test-results/
-
