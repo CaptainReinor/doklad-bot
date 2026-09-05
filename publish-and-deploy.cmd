@@ -2,7 +2,9 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
-git rev-parse --is-inside-work-tree >nul 2>&1
+call :find_git || exit /b 1
+
+"%GIT%" rev-parse --is-inside-work-tree >nul 2>&1
 if errorlevel 1 (
   echo Git repository is not configured yet.
   pause
@@ -12,17 +14,34 @@ if errorlevel 1 (
 set /p "MESSAGE=Describe the update for Git: "
 if not defined MESSAGE set "MESSAGE=Update bot"
 
-git add -A
-git diff --cached --quiet
+"%GIT%" add -A
+"%GIT%" diff --cached --quiet
 if errorlevel 1 (
-  git commit -m "%MESSAGE%"
+  "%GIT%" commit -m "%MESSAGE%"
   if errorlevel 1 goto :failed
 )
-git push
+"%GIT%" push
 if errorlevel 1 goto :failed
 
 call deploy.cmd
 exit /b %errorlevel%
+
+:find_git
+set "GIT=git"
+where git >nul 2>&1 && exit /b 0
+if exist "%ProgramFiles%\Git\cmd\git.exe" (
+  set "GIT=%ProgramFiles%\Git\cmd\git.exe"
+  exit /b 0
+)
+for /D %%D in ("%LOCALAPPDATA%\GitHubDesktop\app-*") do (
+  if exist "%%~fD\resources\app\git\cmd\git.exe" (
+    set "GIT=%%~fD\resources\app\git\cmd\git.exe"
+    exit /b 0
+  )
+)
+echo Git was not found. Install Git for Windows or GitHub Desktop once.
+pause
+exit /b 1
 
 :failed
 echo Git publication failed; deployment was not started.
