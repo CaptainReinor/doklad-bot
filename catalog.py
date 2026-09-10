@@ -15,13 +15,3 @@ NOTIFICATION_DEFAULTS = {
 
 def load_catalog():
     return json.loads(CATALOG_PATH.read_text(encoding='utf-8'))
-
-
-def find_topic(value):
-    # Compatibility with payloads sent by the old Mini App.
-    if isinstance(value, dict):
-        value = value.get('id')
-    for topic in load_catalog()['topics']:
-        if (type(value) is int and topic['id'] == value) or value == topic['title']:
-            return topic
-    return None

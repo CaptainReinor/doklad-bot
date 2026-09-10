@@ -189,11 +189,9 @@ class Service:
         return [topic for topic in topics
                 if topic['isCommon'] or topic['group'] == user['group_name']]
 
-    def find_topic(self, value, *, include_inactive=False):
-        if isinstance(value, dict):
-            value = value.get('id')
+    def find_topic(self, topic_id, *, include_inactive=False):
         for topic in self.topics(include_inactive=include_inactive):
-            if (type(value) is int and topic['id'] == value) or value == topic['title']:
+            if type(topic_id) is int and topic['id'] == topic_id:
                 return topic
         return None
 
@@ -203,10 +201,6 @@ class Service:
         result['topics'] = (self.visible_topics(user_id, include_inactive=True)
                             if public else self.topics())
         result['assignments'] = self.assignments()
-        for row in self.db.get_deadlines():
-            for item in result.get(row['kind'], []):
-                if item['id'] == row['item_id']:
-                    item['deadline'] = row['deadline']
         result['timezone'] = APP_TIMEZONE
         return result
 
@@ -375,7 +369,7 @@ class Service:
                     url = self._optional_url(data.get('url', ''))
                     topic = self.db.create_topic(title, subject, is_common, is_multi, group_name, url)
                     if deadline:
-                        self.db.set_deadline('topics', topic['id'], deadline, title)
+                        self.db.set_deadline('topics', topic['id'], deadline)
                     self.db.log_audit(user_id, 'create', 'topic', topic['id'],
                                       f'Добавлена тема: {title}')
                     return 'Тема добавлена.'
@@ -399,7 +393,7 @@ class Service:
                     topic = self.db.update_topic(item_id, title, subject, is_common, is_multi,
                                                  group_name, url)
                     if deadline and existing_topic.get('deadline') != deadline:
-                        self.db.set_deadline('topics', item_id, deadline, topic['title'])
+                        self.db.set_deadline('topics', item_id, deadline)
                     if changed:
                         self.db.enqueue_topic_change(item_id, user_id)
                     self.db.log_audit(user_id, 'update', 'topic', item_id,
@@ -429,7 +423,7 @@ class Service:
                     raise ActionError('Задание или тема не найдены.')
                 deadline = self._valid_deadline(data.get('deadline'))
                 if item.get('deadline') != deadline:
-                    self.db.set_deadline(kind, item_id, deadline, item['title'])
+                    self.db.set_deadline(kind, item_id, deadline)
                     self.db.enqueue_topic_change(item_id, user_id)
                     self.db.log_audit(user_id, 'deadline', 'topic', item_id,
                                       f"Изменён срок темы «{item['title']}»: {deadline}")
@@ -440,14 +434,8 @@ class Service:
                 profile = data.get('user')
                 if not isinstance(profile, dict):
                     raise ActionError('Укажите данные профиля.')
-                if 'first_name' in profile or 'last_name' in profile:
-                    first = clean_name(profile.get('first_name'), 'имя')
-                    last = clean_name(profile.get('last_name'), 'фамилию')
-                else:
-                    name = clean_text(profile.get('name'), 'имя и фамилию', 4, 161).split(' ', 1)
-                    if len(name) != 2:
-                        raise ActionError('Введите имя и фамилию через пробел.')
-                    first, last = clean_name(name[0], 'имя'), clean_name(name[1], 'фамилию')
+                first = clean_name(profile.get('first_name'), 'имя')
+                last = clean_name(profile.get('last_name'), 'фамилию')
                 group = clean_group(profile.get('group_name', (current or {}).get('group_name')))
                 username = (telegram_user or {}).get('username', (current or {}).get('username', '')) or ''
                 self.db.save_user(user_id, first, last, group, username)
@@ -455,8 +443,7 @@ class Service:
             if not current:
                 raise ActionError('Сначала заполните профиль.', 403)
             if action in ('book_topic', 'cancel_topic'):
-                topic = self.find_topic(data.get('topicId', data.get('topic')),
-                                        include_inactive=True)
+                topic = self.find_topic(data.get('topicId'), include_inactive=True)
                 if not topic:
                     raise ActionError('Неизвестная тема.')
                 if action == 'book_topic':
@@ -471,8 +458,8 @@ class Service:
                     return 'Тема забронирована.' if changed else 'Эта тема уже забронирована вами.'
                 changed = self.db.cancel(topic['title'], user_id)
                 return 'Бронирование отменено.' if changed else 'У вас нет брони на эту тему.'
-            if action in ('notification_settings', 'update_notifications'):
-                kind = data.get('type', data.get('subject'))
+            if action == 'notification_settings':
+                kind = data.get('type')
                 self.db.set_notification(user_id, kind, data.get('enabled'))
                 return 'Настройки уведомлений сохранены.'
             raise ActionError('Неизвестное действие.')

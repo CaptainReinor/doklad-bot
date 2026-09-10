@@ -16,8 +16,6 @@ let currentTopicSubject = "all", currentTopicView = "active", currentHomeworkVie
 const SUBJECT_SHORT_NAMES = Object.freeze({
     "Иностранный язык профессиональных коммуникаций": "Профессиональный иностранный",
     "Методы реализации научно-исследовательских проектов": "Методы НИР",
-    "Научно-исследовательская работа (П)": "НИР",
-    "Практика по профилю профессиональной деятельности (организационно-управленческая) (П)": "Профильная практика",
     "Проектное управление устойчивым развитием организаций": "Устойчивое развитие",
     "Развитие компетенций руководителя проекта и проектных команд": "Компетенции руководителя",
     "Управление бизнес-процессами": "Бизнес-процессы",
@@ -131,6 +129,10 @@ function applyCatalog(data) {
     topicsData = data.topics;
     assignmentsData = data.assignments;
     studyTimezone = data.timezone || "Europe/Moscow";
+    const period = new Intl.DateTimeFormat("ru-RU", {
+        timeZone: studyTimezone, month: "long", year: "numeric"
+    }).format(new Date());
+    document.getElementById("headerPeriod").textContent = period[0].toUpperCase() + period.slice(1);
 }
 
 function applyState(data) {
@@ -172,7 +174,7 @@ function renderAll() {
     if (el) el.textContent = nearest || "—";
 }
 
-async function refreshState(force = false) {
+async function refreshState() {
     if (!tg?.initData || refreshing || busy || document.hidden) return;
     refreshing = true;
     const version = mutationVersion;
@@ -202,7 +204,7 @@ async function manualRefresh() {
     button.classList.add("loading");
     connectionStatus("Обновляем данные…");
     try {
-        await refreshState(true);
+        await refreshState();
         if (connected) showStatus("Данные обновлены.");
     } finally {
         button.disabled = false;

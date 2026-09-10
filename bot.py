@@ -1,5 +1,4 @@
 """Telegram chat interface. Nothing is sent or started on import."""
-import json
 import logging
 import socket
 import threading
@@ -154,20 +153,6 @@ def create_bot(service, token, *, threaded=True, web_app_url=WEB_APP_URL):
                      f'занятых тем {len({row["topic"] for row in group_bookings})}, '
                      f'выступающих {len(group_bookings)}')
         send(message.chat.id, text)
-
-    @client.message_handler(content_types=['web_app_data'])
-    def web_app_data(message):
-        if not private(message):
-            return
-        try:
-            data = json.loads(message.web_app_data.data)
-            result = service.perform(message.from_user.id, data, message.from_user.to_dict())
-            send(message.chat.id, result)
-        except (ValueError, TypeError) as exc:
-            send(message.chat.id, str(exc) if isinstance(exc, ActionError) else 'Некорректные данные приложения.')
-        except Exception as exc:
-            logger.error('Web App action failed: %s', type(exc).__name__)
-            send(message.chat.id, 'Не удалось выполнить действие. Повторите позже.')
 
     # Specific commands must be registered before the text fallback.
     @client.message_handler(content_types=['text'], func=lambda m: bool(m.text) and not m.text.startswith('/'))

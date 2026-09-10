@@ -13,8 +13,6 @@ except ValueError as exc:
     raise RuntimeError('ADMIN_IDS must contain comma-separated Telegram user IDs.') from exc
 if not ADMIN_IDS:
     raise RuntimeError('ADMIN_IDS must contain at least one Telegram user ID.')
-# Kept for compatibility with integrations that still import the original setting.
-ADMIN_ID = next(iter(ADMIN_IDS))
 WEB_APP_URL = os.getenv('WEB_APP_URL', 'https://litvawasi-ops.github.io/my-app/index.html')
 TELEGRAM_API_BASE = os.getenv('TELEGRAM_API_BASE', '').strip().rstrip('/')
 ALLOWED_ORIGINS = {s.strip().rstrip('/') for s in os.getenv(

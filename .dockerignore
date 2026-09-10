@@ -13,8 +13,4 @@ tests
 *.db-*
 *.bak
 config.py
-verification.json
-ИСПРАВЛЕНИЯ.md
 README.md
-deploy/*.cmd
-deploy/server-bootstrap.sh

@@ -15,7 +15,9 @@ $files = @(
 $files += Get-Item -LiteralPath (Join-Path $projectRoot 'Dockerfile')
 $files += Get-Item -LiteralPath (Join-Path $projectRoot 'requirements.txt')
 $files += Get-ChildItem -LiteralPath (Join-Path $projectRoot 'webapp') -File -Recurse
-$files += Get-ChildItem -LiteralPath (Join-Path $projectRoot 'deploy') -File -Recurse
+foreach ($name in @('docker-entrypoint.sh', 'docker.env', 'remote-deploy.sh')) {
+    $files += Get-Item -LiteralPath (Join-Path $projectRoot "deploy\$name")
+}
 
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem

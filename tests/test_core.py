@@ -117,11 +117,11 @@ def test_concurrent_single_speaker_booking_has_one_winner(service):
     assert len(service.db.get_all_bookings()) == 1
 
 
-def test_duplicate_and_legacy_payload_are_idempotent(service):
+def test_repeated_booking_is_idempotent(service):
     register(service)
-    topic = load_catalog()['topics'][0]
-    for value in [topic, topic['title']]:
-        service.perform(1, {'action': 'book_topic', 'topic': value})
+    topic_id = load_catalog()['topics'][0]['id']
+    for _ in range(2):
+        service.perform(1, {'action': 'book_topic', 'topicId': topic_id})
     assert len(service.db.get_all_bookings()) == 1
 
 
@@ -215,7 +215,7 @@ def test_v7_migration_preserves_cross_group_bookings_and_locks_topic(tmp_path):
             INSERT INTO bookings VALUES (2, '{title}', 'Пётр Петров', 2, 'МН-4-25-02', 'x');''')
     db = Database(path)
     db.init()
-    topic = db.get_topic(1)
+    topic = next(item for item in db.get_topics(include_inactive=True) if item['id'] == 1)
     assert topic['is_common'] is True and topic['is_multi'] is False
     assert len(db.get_all_bookings()) == 2
     assert sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0] == 12
@@ -545,7 +545,7 @@ def test_admin_schedule_management_and_validation(service):
         service.perform(ADMIN, {'action': 'create_lesson', **{**lesson, 'url': 'javascript:alert(1)'}})
 
 
-@pytest.mark.parametrize('payload', [None, [], 'abc', {'action': 'book_topic', 'topic': {}},
+@pytest.mark.parametrize('payload', [None, [], 'abc', {'action': 'book_topic'},
                                     {'action': 'book_topic', 'topicId': True},
                                     {'action': 'notification_settings', 'type': 'assignments', 'enabled': 'false'},
                                     {'action': 'no_such_action'}])

@@ -26,8 +26,6 @@ async function main() {
             const context = await browser.newContext({viewport: {width, height:844}, locale:'ru-RU', timezoneId:'Europe/Moscow'});
             await context.route('**/telegram-web-app.js*', route => route.fulfill({contentType:'application/javascript', body:'/* Local test bridge */'}));
             await context.addInitScript(({raw, id}) => {
-                localStorage.setItem('studentAssistantRegistered', 'true');
-                localStorage.setItem('studentAssistantUser', JSON.stringify({name:'Old account', telegramId:99999}));
                 window.Telegram = { WebApp: {initData:raw, initDataUnsafe:{user:{id, first_name:'Тест', last_name:'Студент'}},
                     ready(){}, expand(){}, close(){}, BackButton:{show(){},onClick(){}}, MainButton:{hide(){}}} };
             }, {raw:id ? initData(id) : '', id});
@@ -40,6 +38,8 @@ async function main() {
         const a = await pageFor(101);
         const b = await pageFor(102);
         const c = await pageFor(103);
+        assert.equal((await a.locator('.brand-title').textContent()).trim(), 'МН-4-25');
+        assert.match((await a.locator('#headerPeriod').textContent()).trim(), /^\p{L}+ \d{4}/u);
         await a.getByRole('button', {name:'Обновить данные'}).click();
         await a.waitForFunction(() => !refreshing);
         assert.match(await a.locator('#connectionStatusText').textContent(), /Обновлено в \d{2}:\d{2}/);
@@ -309,7 +309,7 @@ async function main() {
             await download.saveAs(target);
             assert.ok(fs.statSync(target).size > 10000);
             checks.push('PDF export produces a non-empty download');
-        } else checks.push('PDF CDN unavailable in this run; download not exercised');
+        } else checks.push('PDF library unavailable in this run; download not exercised');
         assert.deepEqual(errors, []);
         fs.writeFileSync(path.join(artifacts, 'results.json'), JSON.stringify({checks, errors}, null, 2));
         console.log(JSON.stringify({passed:checks.length, checks, errors}, null, 2));

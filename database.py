@@ -344,10 +344,6 @@ class Database:
         result.pop('deleted', None)
         return result
 
-    def get_topic(self, topic_id):
-        with self.connection() as conn:
-            return self._topic(conn, topic_id)
-
     def get_topics(self, *, include_inactive=False):
         condition = 'deleted=0' if include_inactive else 'deleted=0 AND active=1'
         with self.connection() as conn:
@@ -768,15 +764,13 @@ class Database:
         with self.connection() as conn:
             return [dict(r) for r in conn.execute('SELECT * FROM deadlines')]
 
-    def set_deadline(self, kind, item_id, deadline, title):
+    def set_deadline(self, kind, item_id, deadline):
         with self.connection() as conn:
             conn.execute('''INSERT INTO deadlines (kind, item_id, deadline) VALUES (?, ?, ?)
                 ON CONFLICT(kind, item_id) DO UPDATE SET deadline=excluded.deadline''', (kind, item_id, deadline))
             # Cancel unsent reminders carrying the previous deadline.
             conn.execute('''UPDATE notification_jobs SET sent_at=?
                 WHERE sent_at IS NULL AND event_key LIKE ?''', (time.time(), f'deadline:{kind}:{item_id}:%'))
-            # Deadline edits are reflected in the app; only the due reminder is sent.
-
     @staticmethod
     def _enabled(settings, kind):
         return settings.get(kind, False)

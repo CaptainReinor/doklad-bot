@@ -7,14 +7,12 @@ from telebot import types
 from bot import configure_telegram_api, create_bot, split_message
 
 
-def message(text=None, user_id=1, *, group=False, payload=None):
+def message(text=None, user_id=1, *, group=False):
     data = {'message_id': 1, 'date': 1700000000,
             'chat': {'id': -1000 if group else user_id, 'type': 'group' if group else 'private'},
             'from': {'id': user_id, 'is_bot': False, 'first_name': 'Тест'}}
     if text is not None:
         data['text'] = text
-    if payload is not None:
-        data['web_app_data'] = {'data': payload, 'button_text': 'App'}
     return types.Message.de_json(data)
 
 
@@ -88,11 +86,7 @@ def test_start_uses_inline_app_without_personal_url_parameters(bot, service):
     assert bot.set_chat_menu_button.call_args.kwargs['menu_button'].web_app.url == url
 
 
-def test_old_web_app_payload_and_unknown_commands(bot, service):
-    register(service)
-    dispatch(bot, payload='{"action":"book_topic","topic":{"id":1}}')
-    assert len(service.db.get_all_bookings()) == 1
-    dispatch(bot, payload='[]')
+def test_unknown_command(bot):
     assert 'Неизвестная команда' in dispatch(bot, '/unknown')
 
 

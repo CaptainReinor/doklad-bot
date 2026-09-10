@@ -885,10 +885,6 @@
             color: var(--hint);
         }
 
-        .text-center {
-            text-align: center;
-        }
-
         .mt-12 {
             margin-top: 12px;
         }
@@ -1118,7 +1114,6 @@
         .admin-record.archived { opacity: .72; border-style: dashed; }
         .admin-record summary { cursor: pointer; font-weight: 650; overflow-wrap: anywhere; }
         .admin-record-heading, .admin-booking { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
-        .deadline-control-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
         .admin-bookings { display: grid; gap: 8px; margin: 12px 0; color: var(--hint); }
         .btn-small { padding: 7px 10px; font-size: 12px; }
         .draft-panel { margin: 22px 0; padding: 16px; border: 1px dashed rgba(124, 92, 255, .35); border-radius: var(--radius); background: rgba(124, 92, 255, .035); }
@@ -1151,7 +1146,6 @@
             .admin-create-grid, .lesson-fields { grid-template-columns: 1fr; }
             .admin-create-grid .wide, .lesson-fields .wide { grid-column: auto; }
             .admin-booking { align-items: flex-start; flex-direction: column; }
-            .deadline-control-row { grid-template-columns: 1fr; }
             .admin-stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
     </style>
@@ -1171,15 +1165,15 @@
             <div class="brand-avatar">🎓</div>
 
             <div class="brand-text">
-                <h1 class="brand-title">Учебный центр</h1>
+                <h1 class="brand-title">МН-4-25</h1>
                 <div class="brand-subtitle">
                     Студенческий помощник
                 </div>
             </div>
         </div>
 
-        <div class="header-month">
-            Сентябрь 2026
+        <div class="header-month" id="headerPeriod">
+            Учебный период
         </div>
     </header>
 
