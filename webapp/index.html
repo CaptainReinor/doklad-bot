@@ -1049,6 +1049,32 @@
 
         }
 
+        .booking-item.archived {
+            opacity: 0.82;
+            border-style: dashed;
+        }
+
+        .topic-card.archived {
+            opacity: 0.82;
+            border-style: dashed;
+        }
+
+        .archive-label {
+            margin-top: 10px;
+            color: var(--hint);
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .resource-link {
+            display: inline-flex;
+            width: auto;
+            margin-top: 8px;
+            text-decoration: none;
+        }
+
         /* DARK MODE FALLBACK */
 
         @media (prefers-color-scheme: dark) {
@@ -1086,7 +1112,7 @@
         .form-label { display: block; }
         .admin-actions { display: flex; flex-wrap: wrap; gap: 8px; }
         .admin-create-grid, .lesson-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 12px 0; }
-        .lesson-fields .wide { grid-column: 1 / -1; }
+        .admin-create-grid .wide, .lesson-fields .wide { grid-column: 1 / -1; }
         .admin-records { display: grid; gap: 12px; margin: 18px 0; }
         .admin-record { padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card-bg); }
         .admin-record.archived { opacity: .72; border-style: dashed; }
@@ -1123,7 +1149,7 @@
         button:disabled { opacity: .55; cursor: not-allowed; }
         @media (max-width: 560px) {
             .admin-create-grid, .lesson-fields { grid-template-columns: 1fr; }
-            .lesson-fields .wide { grid-column: auto; }
+            .admin-create-grid .wide, .lesson-fields .wide { grid-column: auto; }
             .admin-booking { align-items: flex-start; flex-direction: column; }
             .deadline-control-row { grid-template-columns: 1fr; }
             .admin-stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1331,8 +1357,10 @@
         </h2>
 
         <p class="section-subtitle">
-            Актуальные задания, описание и срок сдачи
+            Актуальные и прошедшие задания, описание и срок сдачи
         </p>
+
+        <div id="homeworkArchiveFilters" class="filters" aria-label="Состояние домашки"></div>
 
         <div id="homeworkContainer" class="topics-list"></div>
     </section>
@@ -1349,7 +1377,7 @@
         </h2>
 
         <p class="section-subtitle">
-            Выберите тему доклада и проверьте, к какому предмету она относится
+            Выберите актуальную тему или откройте архив прошедших докладов
         </p>
 
         <div class="stats-grid">
@@ -1392,6 +1420,8 @@
                 </span>
             </div>
         </div>
+
+        <div id="topicArchiveFilters" class="filters" aria-label="Состояние докладов"></div>
 
         <div id="topicSubjectFilters" class="filters subject-filters" aria-label="Предметы докладов"></div>
 
@@ -1515,7 +1545,7 @@
 
 
 <script src="config.js?v=20260905-2"></script>
-<script src="app.js?v=20260910-2" defer></script>
+<script src="app.js?v=20260910-3" defer></script>
 
 </body>
 </html>

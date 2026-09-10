@@ -97,8 +97,9 @@ def check_notifications(service, send_message, *, now=None):
             }
             details = (f"{item['subject']}\n{item['description']}" if kind == 'assignments'
                        else item['title'])
+            link = f"\n🔗 Материалы: {item['url']}" if item.get('url') else ''
             service.db.enqueue_notification(
-                kind, f"🔔 Срок сдачи завтра\n{details}\n📅 {deadline}",
+                kind, f"🔔 Срок сдачи завтра\n{details}\n📅 {deadline}{link}",
                 f"deadline:{kind}:{item['id']}:{deadline}", recipients)
     direct_jobs = []
     topic_batches = {}
@@ -114,9 +115,10 @@ def check_notifications(service, send_message, *, now=None):
             if not item or item.get('deadline') != deadline or not still_owned or not is_deadline_tomorrow(deadline, now):
                 service.db.finish_notification(job, success=True)
                 continue
-        if job['event_key'].startswith('topic-added:'):
+        if job['event_key'].startswith(('topic-added:', 'topic-changed:')):
             try:
-                topic_id = int(job['event_key'].rsplit(':', 1)[1])
+                event_kind, raw_topic_id = job['event_key'].split(':', 2)[:2]
+                topic_id = int(raw_topic_id)
             except (TypeError, ValueError):
                 service.db.finish_notification(job, success=True)
                 continue
@@ -125,7 +127,7 @@ def check_notifications(service, send_message, *, now=None):
             if not topic:
                 service.db.finish_notification(job, success=True)
                 continue
-            topic_batches.setdefault(job['user_id'], []).append((job, topic))
+            topic_batches.setdefault(job['user_id'], []).append((job, topic, event_kind))
             continue
         direct_jobs.append(job)
 
@@ -139,22 +141,39 @@ def check_notifications(service, send_message, *, now=None):
             service.db.finish_notification(job, success=True)
 
     for user_id, batch in topic_batches.items():
+        merged = {}
+        for job, topic, event_kind in batch:
+            entry = merged.setdefault(topic['id'], {'topic': topic, 'kinds': set(), 'jobs': []})
+            entry['topic'] = topic
+            entry['kinds'].add(event_kind)
+            entry['jobs'].append(job)
         lines = []
-        for index, (_, topic) in enumerate(batch, 1):
+        for index, entry in enumerate(merged.values(), 1):
+            topic = entry['topic']
             scope = 'Общий доклад' if topic['isCommon'] else f"Группа: {topic['group']}"
             deadline = f"\nСрок: {topic['deadline']}" if topic.get('deadline') else ''
-            lines.append(f"{index}. {topic['title']}\nПредмет: {topic['subject']}\n{scope}{deadline}")
-        heading = ('📚 Добавлена новая тема доклада' if len(batch) == 1 else
-                   f'📚 Добавлены новые темы докладов: {len(batch)}')
+            link = f"\nМатериалы: {topic['url']}" if topic.get('url') else ''
+            lines.append(
+                f"{index}. {topic['title']}\nПредмет: {topic['subject']}\n{scope}{deadline}{link}")
+        kinds = {kind for entry in merged.values() for kind in entry['kinds']}
+        count = len(merged)
+        if kinds == {'topic-added'}:
+            heading = ('📚 Добавлена новая тема доклада' if count == 1 else
+                       f'📚 Добавлены новые темы докладов: {count}')
+        elif kinds == {'topic-changed'}:
+            heading = ('📚 Изменена тема доклада' if count == 1 else
+                       f'📚 Изменены темы докладов: {count}')
+        else:
+            heading = f'📚 Обновления тем докладов: {count}'
         message = heading + '\n\n' + '\n\n'.join(lines)
         try:
             send_message(user_id, message)
         except Exception as exc:
             logger.warning('Notification delivery failed (%s); it will be retried.', type(exc).__name__)
-            for job, _ in batch:
+            for job, _, _ in batch:
                 service.db.finish_notification(job, success=False)
         else:
-            for job, _ in batch:
+            for job, _, _ in batch:
                 service.db.finish_notification(job, success=True)
 
 

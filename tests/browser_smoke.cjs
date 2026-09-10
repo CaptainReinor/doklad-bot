@@ -122,6 +122,7 @@ async function main() {
         assert.equal(await admin.locator('.activity-column').count(), 30);
         assert.equal(await admin.locator('.admin-notification-stat').count(), 4);
         assert.match(await admin.locator('#cabinetContent').textContent(), /Входов сегодня/);
+        assert.doesNotMatch(await admin.locator('#cabinetContent').textContent(), /без фамилий|Новый сеанс/);
         assert.equal(await admin.locator('#cabinetContent').textContent().then(text => /Иванов|Петров/.test(text)), false);
         await admin.screenshot({path:path.join(artifacts, 'admin-stats-desktop.png'), fullPage:true});
         const mobileStats = await pageFor(900);
@@ -137,6 +138,7 @@ async function main() {
         await admin.locator('#newAssignmentSubject').selectOption({label:'Управление бизнес-процессами'});
         await admin.locator('#newAssignmentDescription').fill('Подготовить схему бизнес-процесса и краткое пояснение.');
         await admin.locator('#newAssignmentDeadline').fill('2026-09-30');
+        await admin.locator('#newAssignmentUrl').fill('https://example.edu/homework/current');
         await admin.getByRole('button', {name:'Добавить задание'}).click();
         await admin.locator('.admin-record').filter({hasText:'30.09.2026'}).waitFor();
         await b.evaluate(() => refreshState());
@@ -145,8 +147,20 @@ async function main() {
         assert.equal(await homework.count(), 1);
         assert.match(await homework.textContent(), /Подготовить схему бизнес-процесса/);
         assert.match(await homework.textContent(), /30\.09\.2026/);
+        assert.equal(await homework.getByRole('link', {name:'🔗 Открыть материалы'}).getAttribute('href'), 'https://example.edu/homework/current');
         assert.equal(await homework.getByRole('button').count(), 0);
         checks.push('Homework has its own read-only student tab and admin create/edit/delete controls');
+        await admin.locator('#newAssignmentSubject').selectOption({label:'Управление бизнес-процессами'});
+        await admin.locator('#newAssignmentDescription').fill('Прошедшее тестовое задание.');
+        await admin.locator('#newAssignmentDeadline').fill('2000-01-01');
+        await admin.locator('#newAssignmentUrl').fill('https://example.edu/homework/archive');
+        await admin.getByRole('button', {name:'Добавить задание'}).click();
+        await admin.locator('.admin-record').filter({hasText:'Прошедшее тестовое задание'}).waitFor();
+        await b.evaluate(() => refreshState());
+        await b.locator('#homeworkArchiveFilters').getByRole('button', {name:'Архив'}).click();
+        const archivedHomework = b.locator('#homeworkContainer .homework-card').filter({hasText:'Прошедшее тестовое задание'});
+        assert.equal(await archivedHomework.count(), 1);
+        assert.equal(await archivedHomework.getByRole('link', {name:'🔗 Открыть материалы'}).getAttribute('href'), 'https://example.edu/homework/archive');
         await admin.evaluate(() => closeHomeworkEditor());
         await admin.getByRole('button', {name:'📚 Управление темами'}).click();
         await admin.locator('#draftTopicTitles').fill('1. Массовая тема А\n2. Массовая тема Б');
@@ -166,6 +180,7 @@ async function main() {
         await admin.locator('#newTopicTitle').fill('Тестовая тема администратора');
         await admin.locator('#newTopicSubject').selectOption({label:'Бизнес-процессы'});
         await admin.locator('#newTopicDeadline').fill('2026-10-15');
+        await admin.locator('#newTopicUrl').fill('https://example.edu/reports/current');
         await admin.locator('#newTopicGroup').selectOption('МН-4-25-02');
         await admin.locator('#newTopicMulti').check();
         await admin.getByRole('button', {name:'Добавить тему'}).click();
@@ -177,6 +192,7 @@ async function main() {
         assert.match(await createdTopic.textContent(), /Бизнес-процессы/);
         assert.match(await createdTopic.textContent(), /15\.10\.2026/);
         assert.match(await createdTopic.textContent(), /Несколько выступающих/);
+        assert.equal(await createdTopic.getByRole('link', {name:'🔗 Открыть материалы'}).getAttribute('href'), 'https://example.edu/reports/current');
         await b.getByRole('button', {name:'Бизнес-процессы', exact:true}).click();
         assert.ok(await b.locator('#topicsContainer .topic-card').count() >= 1);
         await b.evaluate(() => switchTab('reports'));
@@ -187,6 +203,22 @@ async function main() {
         await b.evaluate(() => refreshState());
         assert.equal(await b.locator('#topicsContainer .topic-card').nth(0).getByRole('button', {name:'Отменить выбор'}).count(), 0);
         checks.push('Topic manager controls report topics and their deadlines');
+        await admin.locator('#newTopicTitle').fill('Архивный тестовый доклад');
+        await admin.locator('#newTopicSubject').selectOption({label:'Бизнес-процессы'});
+        await admin.locator('#newTopicDeadline').fill('2000-01-01');
+        await admin.locator('#newTopicGroup').selectOption('МН-4-25-02');
+        await admin.locator('#newTopicUrl').fill('https://example.edu/reports/archive');
+        await admin.getByRole('button', {name:'Добавить тему'}).click();
+        await admin.locator('input[value="Архивный тестовый доклад"]').waitFor();
+        await b.evaluate(() => refreshState());
+        await b.evaluate(() => switchTab('reports'));
+        await b.locator('#topicArchiveFilters').getByRole('button', {name:'Архив'}).click();
+        const archivedTopic = b.locator('#topicsContainer .topic-card').filter({hasText:'Архивный тестовый доклад'});
+        assert.equal(await archivedTopic.count(), 1);
+        assert.equal(await archivedTopic.getByRole('button', {name:'Выбрать тему'}).count(), 0);
+        assert.equal(await archivedTopic.getByRole('link', {name:'🔗 Открыть материалы'}).getAttribute('href'), 'https://example.edu/reports/archive');
+        await b.screenshot({path:path.join(artifacts, 'archives-mobile.png'), fullPage:true});
+        checks.push('Homework and reports support HTTPS resources and automatically move past deadlines to archives');
         await admin.screenshot({path:path.join(artifacts, 'admin-topics-desktop.png'), fullPage:true});
 
         await admin.evaluate(() => closeTopicEditor());
@@ -237,6 +269,8 @@ async function main() {
         await b.evaluate(() => switchTab('notifications'));
         assert.equal(await b.locator('.notification-item').count(), 4);
         assert.equal(await b.locator('.notification-item').filter({hasText:'Общий список бронирований'}).count(), 0);
+        assert.match(await b.locator('.notification-item').filter({hasText:'Темы докладов'}).textContent(),
+            /Новые темы, изменения старых, напоминание за день до сдачи/);
         assert.equal(await b.getByRole('checkbox', {name:'Напоминания о парах', exact:true}).isChecked(), false);
         await b.locator('.notification-item').filter({hasText:'Напоминания о парах'}).locator('.slider').click();
         await b.waitForFunction(() => !busy);

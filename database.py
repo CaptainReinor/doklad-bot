@@ -99,6 +99,7 @@ class Database:
                 is_common INTEGER NOT NULL DEFAULT 0,
                 is_multi INTEGER NOT NULL DEFAULT 0,
                 group_name TEXT NOT NULL DEFAULT 'МН-4-25-01',
+                url TEXT NOT NULL DEFAULT '',
                 active INTEGER NOT NULL DEFAULT 1,
                 deleted INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
@@ -112,6 +113,8 @@ class Database:
                 conn.execute("ALTER TABLE topics ADD COLUMN is_multi INTEGER NOT NULL DEFAULT 0")
             if 'group_name' not in topic_columns:
                 conn.execute("ALTER TABLE topics ADD COLUMN group_name TEXT NOT NULL DEFAULT 'МН-4-25-01'")
+            if 'url' not in topic_columns:
+                conn.execute("ALTER TABLE topics ADD COLUMN url TEXT NOT NULL DEFAULT ''")
             now = timestamp()
             conn.executemany('''INSERT OR IGNORE INTO topics
                 (id, title, subject, is_common, is_multi, group_name, active, deleted, created_at, updated_at)
@@ -166,8 +169,11 @@ class Database:
                 subject TEXT NOT NULL,
                 description TEXT NOT NULL,
                 deadline TEXT NOT NULL,
+                url TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL)''')
+            if 'url' not in {r['name'] for r in conn.execute('PRAGMA table_info(assignments)')}:
+                conn.execute("ALTER TABLE assignments ADD COLUMN url TEXT NOT NULL DEFAULT ''")
             conn.execute('''CREATE TABLE IF NOT EXISTS topic_drafts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 admin_id INTEGER NOT NULL,
@@ -177,9 +183,12 @@ class Database:
                 is_common INTEGER NOT NULL DEFAULT 0,
                 is_multi INTEGER NOT NULL DEFAULT 0,
                 group_name TEXT NOT NULL DEFAULT 'МН-4-25-01',
+                url TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 UNIQUE(admin_id, title))''')
+            if 'url' not in {r['name'] for r in conn.execute('PRAGMA table_info(topic_drafts)')}:
+                conn.execute("ALTER TABLE topic_drafts ADD COLUMN url TEXT NOT NULL DEFAULT ''")
             conn.execute('''CREATE TABLE IF NOT EXISTS audit_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 actor_id INTEGER NOT NULL,
@@ -207,7 +216,7 @@ class Database:
                         (kind='assignments' AND event_key NOT LIKE 'deadline:%'))''',
                              (migration_time,))
                 conn.execute("DELETE FROM notification_settings WHERE kind IN ('bookings', 'queue')")
-            conn.execute('PRAGMA user_version=11')
+            conn.execute('PRAGMA user_version=12')
 
     @staticmethod
     def _user(conn, user_id):
@@ -353,14 +362,15 @@ class Database:
                 result.append(item)
             return result
 
-    def create_topic(self, title, subject, is_common, is_multi, group_name):
+    def create_topic(self, title, subject, is_common, is_multi, group_name, url=''):
         try:
             with self.connection() as conn:
                 now = timestamp()
                 cursor = conn.execute('''INSERT INTO topics
-                    (title, subject, is_common, is_multi, group_name, active, deleted, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?)''',
-                                      (title, subject, int(is_common), int(is_multi), group_name, now, now))
+                    (title, subject, is_common, is_multi, group_name, url, active, deleted,
+                     created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?)''',
+                                      (title, subject, int(is_common), int(is_multi), group_name,
+                                       url, now, now))
                 topic = self._topic(conn, cursor.lastrowid)
                 scope = 'Общий доклад' if is_common else f'Группа: {group_name}'
                 deliver_after = time.time() + TOPIC_NOTIFICATION_BATCH_DELAY
@@ -368,10 +378,12 @@ class Database:
                     'SELECT user_id FROM users WHERE group_name=?', (group_name,))}
                 # Debounce a burst of additions: the timer restarts for the whole pending batch.
                 conn.execute('''UPDATE notification_jobs SET next_attempt=?
-                    WHERE sent_at IS NULL AND event_key LIKE 'topic-added:%' ''',
+                    WHERE sent_at IS NULL AND
+                    (event_key LIKE 'topic-added:%' OR event_key LIKE 'topic-changed:%')''',
                              (deliver_after,))
+                link = f'\nМатериалы: {url}' if url else ''
                 self._enqueue(conn, 'topics',
-                              f'{title}\nПредмет: {subject}\n{scope}',
+                              f'{title}\nПредмет: {subject}\n{scope}{link}',
                               event_key=f'topic-added:{topic["id"]}',
                               recipients=recipients,
                               next_attempt=deliver_after)
@@ -403,10 +415,11 @@ class Database:
                     raise ValueError('В списке есть повтор или тема, которая уже существует.')
                 now = timestamp()
                 conn.executemany('''INSERT INTO topic_drafts
-                    (admin_id, title, subject, deadline, is_common, is_multi, group_name,
-                     created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''', [
+                    (admin_id, title, subject, deadline, is_common, is_multi, group_name, url,
+                     created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', [
                     (admin_id, item['title'], item['subject'], item.get('deadline', ''),
-                     int(item['is_common']), int(item['is_multi']), item['group_name'], now, now)
+                     int(item['is_common']), int(item['is_multi']), item['group_name'],
+                     item.get('url', ''), now, now)
                     for item in drafts
                 ])
                 return [self._draft(row) for row in conn.execute(
@@ -436,24 +449,27 @@ class Database:
                 now = timestamp()
                 deliver_after = time.time() + TOPIC_NOTIFICATION_BATCH_DELAY
                 conn.execute('''UPDATE notification_jobs SET next_attempt=?
-                    WHERE sent_at IS NULL AND event_key LIKE 'topic-added:%' ''', (deliver_after,))
+                    WHERE sent_at IS NULL AND
+                    (event_key LIKE 'topic-added:%' OR event_key LIKE 'topic-changed:%')''',
+                             (deliver_after,))
                 topics = []
                 for draft in drafts:
                     cursor = conn.execute('''INSERT INTO topics
-                        (title, subject, is_common, is_multi, group_name, active, deleted,
-                         created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?)''',
+                        (title, subject, is_common, is_multi, group_name, url, active, deleted,
+                         created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?)''',
                         (draft['title'], draft['subject'], draft['is_common'], draft['is_multi'],
-                         draft['group_name'], now, now))
+                         draft['group_name'], draft['url'], now, now))
                     topic = self._topic(conn, cursor.lastrowid)
                     if draft['deadline']:
                         conn.execute('''INSERT INTO deadlines (kind, item_id, deadline)
                             VALUES ('topics', ?, ?)''', (topic['id'], draft['deadline']))
                     scope = 'Общий доклад' if topic['is_common'] else f"Группа: {topic['group_name']}"
+                    link = f"\nМатериалы: {topic['url']}" if topic['url'] else ''
                     recipients = None if topic['is_common'] else {
                         row['user_id'] for row in conn.execute(
                             'SELECT user_id FROM users WHERE group_name=?', (topic['group_name'],))}
                     self._enqueue(conn, 'topics',
-                                  f"{topic['title']}\nПредмет: {topic['subject']}\n{scope}",
+                                  f"{topic['title']}\nПредмет: {topic['subject']}\n{scope}{link}",
                                   event_key=f"topic-added:{topic['id']}", recipients=recipients,
                                   next_attempt=deliver_after)
                     topics.append(topic)
@@ -480,7 +496,7 @@ class Database:
                 FROM audit_log a LEFT JOIN users u ON u.user_id=a.actor_id
                 ORDER BY a.id DESC LIMIT ?''', (limit,))]
 
-    def update_topic(self, topic_id, title, subject, is_common, is_multi, group_name):
+    def update_topic(self, topic_id, title, subject, is_common, is_multi, group_name, url=''):
         try:
             with self.connection() as conn:
                 conn.execute('BEGIN IMMEDIATE')
@@ -489,7 +505,7 @@ class Database:
                     raise ValueError('Тема не найдена.')
                 if (topic['title'] == title and topic['subject'] == subject and
                         topic['is_common'] == is_common and topic['is_multi'] == is_multi and
-                        topic['group_name'] == group_name):
+                        topic['group_name'] == group_name and topic['url'] == url):
                     return topic
                 bookings = conn.execute('SELECT * FROM bookings WHERE topic=?',
                                         (topic['title'],)).fetchall()
@@ -502,14 +518,30 @@ class Database:
                 if not is_multi and len(bookings) > 1:
                     raise TopicInUse('Сначала оставьте только одного выступающего.')
                 conn.execute('''UPDATE topics SET title=?, subject=?, is_common=?, is_multi=?,
-                    group_name=?, updated_at=? WHERE id=?''',
+                    group_name=?, url=?, updated_at=? WHERE id=?''',
                              (title, subject, int(is_common), int(is_multi), group_name,
-                              timestamp(), topic_id))
+                              url, timestamp(), topic_id))
                 if topic['title'] != title:
                     conn.execute('UPDATE bookings SET topic=? WHERE topic=?', (title, topic['title']))
                 return self._topic(conn, topic_id)
         except sqlite3.IntegrityError as exc:
             raise ValueError('Тема с таким названием уже существует.') from exc
+
+    def enqueue_topic_change(self, topic_id, actor_id=None):
+        with self.connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            topic = self._topic(conn, topic_id)
+            if not topic:
+                raise ValueError('Тема не найдена.')
+            deliver_after = time.time() + TOPIC_NOTIFICATION_BATCH_DELAY
+            conn.execute('''UPDATE notification_jobs SET next_attempt=?
+                WHERE sent_at IS NULL AND
+                (event_key LIKE 'topic-added:%' OR event_key LIKE 'topic-changed:%')''',
+                         (deliver_after,))
+            recipients = None if topic['is_common'] else {row['user_id'] for row in conn.execute(
+                'SELECT user_id FROM users WHERE group_name=?', (topic['group_name'],))}
+            self._enqueue(conn, 'topics', '', event_key=f'topic-changed:{topic_id}:{uuid.uuid4()}',
+                          actor_id=actor_id, recipients=recipients, next_attempt=deliver_after)
 
     def set_topic_active(self, topic_id, active):
         with self.connection() as conn:
@@ -619,28 +651,31 @@ class Database:
                 "SELECT * FROM assignments ORDER BY substr(deadline, 7, 4), substr(deadline, 4, 2), "
                 "substr(deadline, 1, 2), id")]
 
-    def create_assignment(self, subject, description, deadline):
+    def create_assignment(self, subject, description, deadline, url=''):
         with self.connection() as conn:
             now = timestamp()
             cursor = conn.execute('''INSERT INTO assignments
-                (subject, description, deadline, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?)''', (subject, description, deadline, now, now))
+                (subject, description, deadline, url, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)''', (subject, description, deadline, url, now, now))
             assignment = self._assignment(conn, cursor.lastrowid)
+            link = f'\n🔗 Материалы: {url}' if url else ''
             self._enqueue(conn, 'assignments',
-                          f'📝 Добавлено домашнее задание\n{subject}\n{description}\n📅 Срок: {deadline}')
+                          f'📝 Добавлено домашнее задание\n{subject}\n{description}\n'
+                          f'📅 Срок: {deadline}{link}')
             return assignment
 
-    def update_assignment(self, assignment_id, subject, description, deadline):
+    def update_assignment(self, assignment_id, subject, description, deadline, url=''):
         with self.connection() as conn:
             conn.execute('BEGIN IMMEDIATE')
             assignment = self._assignment(conn, assignment_id)
             if not assignment:
                 raise ValueError('Домашнее задание не найдено.')
-            if (assignment['subject'], assignment['description'], assignment['deadline']) == (
-                    subject, description, deadline):
+            if (assignment['subject'], assignment['description'], assignment['deadline'],
+                    assignment['url']) == (subject, description, deadline, url):
                 return assignment
-            conn.execute('''UPDATE assignments SET subject=?, description=?, deadline=?, updated_at=?
-                WHERE id=?''', (subject, description, deadline, timestamp(), assignment_id))
+            conn.execute('''UPDATE assignments SET subject=?, description=?, deadline=?, url=?,
+                updated_at=? WHERE id=?''',
+                         (subject, description, deadline, url, timestamp(), assignment_id))
             if assignment['deadline'] != deadline:
                 conn.execute('''UPDATE notification_jobs SET sent_at=?
                     WHERE sent_at IS NULL AND event_key LIKE ?''',

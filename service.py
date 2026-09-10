@@ -3,6 +3,7 @@ import re
 import unicodedata
 from datetime import datetime
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 from catalog import load_catalog
 from database import BookingConflict, TopicInUse
@@ -107,15 +108,7 @@ class Service:
         if lesson_type not in ('Л', 'ПЗ'):
             raise ActionError('Тип занятия должен быть «Л» или «ПЗ».')
         day_names = ('Пн.', 'Вт.', 'Ср.', 'Чт.', 'Пт.', 'Сб.', 'Вс.')
-        meeting_url = data.get('url', '')
-        if not isinstance(meeting_url, str):
-            raise ActionError('Ссылка на пару должна быть текстом.')
-        meeting_url = meeting_url.strip()
-        if meeting_url:
-            parsed = urlsplit(meeting_url)
-            if (len(meeting_url) > 1000 or parsed.scheme != 'https' or not parsed.hostname or
-                    any(char.isspace() for char in meeting_url)):
-                raise ActionError('Укажите полную HTTPS-ссылку на пару.')
+        meeting_url = Service._optional_url(data.get('url', ''), 'пару')
         return {
             'date': value,
             'day': day_names[lesson_date.weekday()],
@@ -127,6 +120,28 @@ class Service:
             'group': clean_group(data.get('group')),
             'url': meeting_url
         }
+
+    @staticmethod
+    def _optional_url(value, target='материалы'):
+        if not isinstance(value, str):
+            raise ActionError('Ссылка должна быть текстом.')
+        value = value.strip()
+        if value:
+            parsed = urlsplit(value)
+            if (len(value) > 1000 or parsed.scheme != 'https' or not parsed.hostname or
+                    any(char.isspace() for char in value)):
+                raise ActionError(f'Укажите полную HTTPS-ссылку на {target}.')
+        return value
+
+    @staticmethod
+    def _deadline_is_past(value):
+        if not value:
+            return False
+        try:
+            deadline = datetime.strptime(value, '%d.%m.%Y').date()
+        except (TypeError, ValueError):
+            return False
+        return deadline < datetime.now(ZoneInfo(APP_TIMEZONE)).date()
 
     def _topic_subject(self, value):
         subject = clean_text(value, 'название предмета', 2, 200)
@@ -147,11 +162,20 @@ class Service:
     def topics(self, *, include_inactive=False):
         deadlines = {(row['kind'], row['item_id']): row['deadline'] for row in self.db.get_deadlines()}
         default_deadlines = {item['id']: item.get('deadline') for item in load_catalog()['topics']}
-        return [{'id': row['id'], 'title': row['title'], 'subject': row['subject'],
-                 'active': row['active'], 'isCommon': row['is_common'],
-                 'isMulti': row['is_multi'], 'group': row['group_name'],
-                 'deadline': deadlines.get(('topics', row['id']), default_deadlines.get(row['id']))}
-                for row in self.db.get_topics(include_inactive=include_inactive)]
+        result = []
+        for row in self.db.get_topics(include_inactive=include_inactive):
+            deadline = deadlines.get(('topics', row['id']), default_deadlines.get(row['id']))
+            archived = not row['active'] or self._deadline_is_past(deadline)
+            result.append({'id': row['id'], 'title': row['title'], 'subject': row['subject'],
+                           'active': row['active'], 'archived': archived,
+                           'isCommon': row['is_common'], 'isMulti': row['is_multi'],
+                           'group': row['group_name'], 'deadline': deadline,
+                           'url': row.get('url', '')})
+        return result if include_inactive else [topic for topic in result if not topic['archived']]
+
+    def assignments(self):
+        return [{**row, 'archived': self._deadline_is_past(row.get('deadline'))}
+                for row in self.db.get_assignments()]
 
     def visible_topics(self, user_id=None, *, include_inactive=False):
         topics = self.topics(include_inactive=include_inactive)
@@ -174,8 +198,9 @@ class Service:
     def catalog(self, user_id=None, *, public=False):
         result = load_catalog()
         result['schedule'] = self.db.get_lessons()
-        result['topics'] = self.visible_topics(user_id) if public else self.topics()
-        result['assignments'] = self.db.get_assignments()
+        result['topics'] = (self.visible_topics(user_id, include_inactive=True)
+                            if public else self.topics())
+        result['assignments'] = self.assignments()
         for row in self.db.get_deadlines():
             for item in result.get(row['kind'], []):
                 if item['id'] == row['item_id']:
@@ -197,9 +222,11 @@ class Service:
         visible_titles = {topic['title'] for topic in self.visible_topics(user_id, include_inactive=True)}
         visible_rows = rows if self.is_admin(user_id) else [row for row in rows if row['topic'] in visible_titles]
         bookings = [{'id': topics.get(r['topic'], {}).get('id'), 'title': r['topic'],
-                     'subject': topics.get(r['topic'], {}).get('subject', ''), 'user': r['booked_by'],
-                     'group': r['group_name'], 'isMine': r['user_id'] == user_id,
-                     'date': r['created_at']} for r in visible_rows]
+                      'subject': topics.get(r['topic'], {}).get('subject', ''), 'user': r['booked_by'],
+                      'group': r['group_name'], 'isMine': r['user_id'] == user_id,
+                      'archived': topics.get(r['topic'], {}).get('archived', False),
+                      'url': topics.get(r['topic'], {}).get('url', ''),
+                      'date': r['created_at']} for r in visible_rows]
         result = {'user': self.public_profile(user), 'bookings': bookings,
                   'notifications': settings, 'participants': len({r['user_id'] for r in visible_rows}),
                   'isAdmin': self.is_admin(user_id)}
@@ -209,12 +236,12 @@ class Service:
                 for row in rows if row['topic'] == topic['title']
             ]} for topic in all_topics]
             result['adminLessons'] = self.db.get_lessons(include_inactive=True)
-            result['adminAssignments'] = self.db.get_assignments()
+            result['adminAssignments'] = self.assignments()
             result['adminStats'] = self.db.get_admin_stats()
             result['topicDrafts'] = [{
                 'id': row['id'], 'title': row['title'], 'subject': row['subject'],
                 'deadline': row['deadline'], 'isCommon': row['is_common'],
-                'isMulti': row['is_multi'], 'group': row['group_name']
+                'isMulti': row['is_multi'], 'group': row['group_name'], 'url': row['url']
             } for row in self.db.get_topic_drafts(user_id)]
             result['auditLog'] = [{
                 'id': row['id'], 'action': row['action'], 'entityType': row['entity_type'],
@@ -249,7 +276,8 @@ class Service:
                     subject = self._topic_subject(data.get('subject'))
                     description = clean_description(data.get('description'))
                     deadline = self._valid_deadline(data.get('deadline'))
-                    assignment = self.db.create_assignment(subject, description, deadline)
+                    url = self._optional_url(data.get('url', ''))
+                    assignment = self.db.create_assignment(subject, description, deadline, url)
                     self.db.log_audit(user_id, 'create', 'assignment', assignment['id'],
                                       f'Добавлена домашка: {subject}')
                     return 'Домашнее задание добавлено.'
@@ -260,7 +288,8 @@ class Service:
                     subject = self._topic_subject(data.get('subject'))
                     description = clean_description(data.get('description'))
                     deadline = self._valid_deadline(data.get('deadline'))
-                    self.db.update_assignment(assignment_id, subject, description, deadline)
+                    url = self._optional_url(data.get('url', ''))
+                    self.db.update_assignment(assignment_id, subject, description, deadline, url)
                     self.db.log_audit(user_id, 'update', 'assignment', assignment_id,
                                       f'Изменена домашка: {subject}')
                     return 'Домашнее задание сохранено.'
@@ -313,9 +342,11 @@ class Service:
                     subject = self._topic_subject(data.get('subject'))
                     is_common, is_multi, group_name = self._topic_scope(data)
                     deadline = self._valid_deadline(data['deadline']) if data.get('deadline') else ''
+                    url = self._optional_url(data.get('url', ''))
                     self.db.add_topic_drafts(user_id, [{
                         'title': title, 'subject': subject, 'deadline': deadline,
-                        'is_common': is_common, 'is_multi': is_multi, 'group_name': group_name
+                        'is_common': is_common, 'is_multi': is_multi, 'group_name': group_name,
+                        'url': url
                     } for title in titles])
                     return f'В черновик добавлено тем: {len(titles)}.'
                 if action == 'delete_topic_draft':
@@ -339,7 +370,8 @@ class Service:
                     subject = self._topic_subject(data.get('subject'))
                     is_common, is_multi, group_name = self._topic_scope(data)
                     deadline = self._valid_deadline(data['deadline']) if data.get('deadline') else None
-                    topic = self.db.create_topic(title, subject, is_common, is_multi, group_name)
+                    url = self._optional_url(data.get('url', ''))
+                    topic = self.db.create_topic(title, subject, is_common, is_multi, group_name, url)
                     if deadline:
                         self.db.set_deadline('topics', topic['id'], deadline, title)
                     self.db.log_audit(user_id, 'create', 'topic', topic['id'],
@@ -354,9 +386,20 @@ class Service:
                     subject = self._topic_subject(data.get('subject'))
                     is_common, is_multi, group_name = self._topic_scope(data)
                     deadline = self._valid_deadline(data['deadline']) if data.get('deadline') else None
-                    topic = self.db.update_topic(item_id, title, subject, is_common, is_multi, group_name)
+                    url = self._optional_url(data.get('url', ''))
+                    changed = any((existing_topic['title'] != title,
+                                   existing_topic['subject'] != subject,
+                                   existing_topic['isCommon'] != is_common,
+                                   existing_topic['isMulti'] != is_multi,
+                                   existing_topic['group'] != group_name,
+                                   existing_topic.get('url', '') != url,
+                                   bool(deadline) and existing_topic.get('deadline') != deadline))
+                    topic = self.db.update_topic(item_id, title, subject, is_common, is_multi,
+                                                 group_name, url)
                     if deadline and existing_topic.get('deadline') != deadline:
                         self.db.set_deadline('topics', item_id, deadline, topic['title'])
+                    if changed:
+                        self.db.enqueue_topic_change(item_id, user_id)
                     self.db.log_audit(user_id, 'update', 'topic', item_id,
                                       f'Изменена тема: {topic["title"]}')
                     return 'Тема сохранена.'
@@ -385,6 +428,7 @@ class Service:
                 deadline = self._valid_deadline(data.get('deadline'))
                 if item.get('deadline') != deadline:
                     self.db.set_deadline(kind, item_id, deadline, item['title'])
+                    self.db.enqueue_topic_change(item_id, user_id)
                     self.db.log_audit(user_id, 'deadline', 'topic', item_id,
                                       f"Изменён срок темы «{item['title']}»: {deadline}")
                 return 'Срок сохранён.'
@@ -410,10 +454,12 @@ class Service:
                 raise ActionError('Сначала заполните профиль.', 403)
             if action in ('book_topic', 'cancel_topic'):
                 topic = self.find_topic(data.get('topicId', data.get('topic')),
-                                        include_inactive=action == 'cancel_topic')
+                                        include_inactive=True)
                 if not topic:
                     raise ActionError('Неизвестная тема.')
                 if action == 'book_topic':
+                    if topic['archived']:
+                        raise ActionError('Эта тема находится в архиве.', 409)
                     if topic['id'] not in {item['id'] for item in self.visible_topics(user_id)}:
                         raise ActionError('Эта тема предназначена для другой группы.', 403)
                     changed = self.db.book({

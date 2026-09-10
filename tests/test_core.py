@@ -205,7 +205,7 @@ def test_v7_migration_preserves_cross_group_bookings_and_locks_topic(tmp_path):
     topic = db.get_topic(1)
     assert topic['is_common'] is True and topic['is_multi'] is False
     assert len(db.get_all_bookings()) == 2
-    assert sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0] == 11
+    assert sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0] == 12
 
 
 def test_db_location_does_not_follow_cwd(db, monkeypatch, tmp_path):
@@ -276,7 +276,7 @@ def test_notification_failure_retries_and_claim_not_shared(db):
     assert db.claim_notifications(now=2000) == []
 
 
-def test_topic_additions_are_group_scoped_batched_and_edits_are_silent(service):
+def test_topic_additions_and_edits_are_group_scoped_and_batched(service):
     register(service, 1, group='МН-4-25-01')
     register(service, 2, group='МН-4-25-02')
     subject = service.catalog()['schedule'][0]['subject']
@@ -296,11 +296,21 @@ def test_topic_additions_are_group_scoped_batched_and_edits_are_silent(service):
     service.perform(ADMIN, {'action': 'update_topic', 'topicId': topic['id'],
                             'title': 'Новая тема исправлена', 'subject': subject,
                             'group': 'МН-4-25-01', 'deadline': '26.09.2026'})
+    second = next(item for item in service.catalog()['topics'] if item['title'] == 'Новая тема два')
+    service.perform(ADMIN, {'action': 'update_topic', 'topicId': second['id'],
+                            'title': 'Новая тема два исправлена', 'subject': subject,
+                            'group': 'МН-4-25-01', 'deadline': '27.09.2026'})
     service.perform(ADMIN, {'action': 'set_topic_active', 'topicId': topic['id'], 'active': False})
     service.perform(ADMIN, {'action': 'set_topic_active', 'topicId': topic['id'], 'active': True})
     service.perform(1, {'action': 'book_topic', 'topicId': topic['id']})
     service.perform(1, {'action': 'cancel_topic', 'topicId': topic['id']})
     assert service.db.claim_notifications() == []
+    with service.db.connection() as conn:
+        conn.execute("UPDATE notification_jobs SET next_attempt=0 WHERE event_key LIKE 'topic-changed:%'")
+    sent.clear()
+    check_notifications(service, lambda uid, text: sent.append((uid, text)))
+    assert len(sent) == 1 and sent[0][0] == 1
+    assert 'Изменены темы докладов: 2' in sent[0][1]
 
 
 def test_four_notification_toggles_and_homework_edits_are_silent(service):
@@ -609,3 +619,54 @@ def test_aggregate_admin_stats_counts_sessions_and_notification_preferences(clie
     assert preferences['lessons'] == {'kind': 'lessons', 'enabled': 1, 'percent': 50}
     assert 'adminStats' in service.state(ADMIN)
     assert 'adminStats' not in service.state(1)
+
+
+def test_resource_links_archives_and_report_deadline_reminder(service):
+    register(service, 1)
+    subject = 'Управление бизнес-процессами'
+    homework_url = 'https://example.edu/homework/1'
+    service.perform(ADMIN, {'action': 'create_assignment', 'subject': subject,
+                            'description': 'Архивное задание с материалами.',
+                            'deadline': '01.01.2000', 'url': homework_url})
+    assignment = service.catalog()['assignments'][-1]
+    assert assignment['archived'] is True and assignment['url'] == homework_url
+    updated_homework_url = 'https://example.edu/homework/updated'
+    service.perform(ADMIN, {'action': 'update_assignment', 'assignmentId': assignment['id'],
+                            'subject': subject, 'description': assignment['description'],
+                            'deadline': assignment['deadline'], 'url': updated_homework_url})
+    assert service.catalog()['assignments'][-1]['url'] == updated_homework_url
+
+    archived_url = 'https://example.edu/reports/archive'
+    service.perform(ADMIN, {'action': 'create_topic', 'title': 'Архивный доклад',
+                            'subject': subject, 'group': 'МН-4-25-01',
+                            'deadline': '01.01.2000', 'url': archived_url})
+    archived = next(item for item in service.catalog(1, public=True)['topics']
+                    if item['title'] == 'Архивный доклад')
+    assert archived['archived'] is True and archived['url'] == archived_url
+    assert archived['id'] not in {item['id'] for item in service.catalog()['topics']}
+    with pytest.raises(ActionError, match='архиве'):
+        service.perform(1, {'action': 'book_topic', 'topicId': archived['id']})
+
+    report_url = 'https://example.edu/reports/active'
+    service.perform(ADMIN, {'action': 'create_topic', 'title': 'Доклад с материалами',
+                            'subject': subject, 'group': 'МН-4-25-01',
+                            'deadline': '31.12.2099', 'url': report_url})
+    topic = next(item for item in service.catalog()['topics']
+                 if item['title'] == 'Доклад с материалами')
+    edited_url = 'https://example.edu/reports/updated'
+    service.perform(ADMIN, {'action': 'update_topic', 'topicId': topic['id'],
+                            'title': topic['title'], 'subject': subject,
+                            'group': 'МН-4-25-01', 'deadline': '31.12.2099',
+                            'url': edited_url})
+    service.perform(1, {'action': 'book_topic', 'topicId': topic['id']})
+    with service.db.connection() as conn:
+        conn.execute('UPDATE notification_jobs SET sent_at=0 WHERE sent_at IS NULL')
+    sent = []
+    check_notifications(service, lambda uid, message: sent.append((uid, message)),
+                        now=datetime(2099, 12, 30, 12, 0))
+    assert sent == [(1, f'🔔 Срок сдачи завтра\nДоклад с материалами\n'
+                        f'📅 31.12.2099\n🔗 Материалы: {edited_url}')]
+    with pytest.raises(ActionError, match='HTTPS'):
+        service.perform(ADMIN, {'action': 'create_assignment', 'subject': subject,
+                                'description': 'Неверная ссылка.', 'deadline': '31.12.2099',
+                                'url': 'http://example.edu/file'})
