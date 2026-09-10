@@ -2,6 +2,8 @@
 import hashlib
 import json
 import logging
+import math
+import re
 import threading
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -24,13 +26,66 @@ def is_deadline_tomorrow(deadline_str, current_date):
         return False
 
 
+def lesson_start(lesson, timezone):
+    """Return the lesson start in the study timezone, or None for invalid legacy data."""
+    match = re.match(r'\s*(\d{1,2})[.:](\d{2})', lesson.get('time', ''))
+    if not match:
+        return None
+    try:
+        value = datetime.strptime(lesson['date'], '%d.%m.%Y')
+        return value.replace(hour=int(match.group(1)), minute=int(match.group(2)),
+                             tzinfo=timezone)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def lesson_day_message(lessons, now, timezone):
+    first_start = lesson_start(lessons[0], timezone)
+    minutes = max(1, math.ceil((first_start - now).total_seconds() / 60))
+    heading = ('⏰ Занятия начнутся примерно через час' if minutes >= 55
+               else f'⏰ Занятия начнутся через {minutes} мин.')
+    lesson_date = first_start.date()
+    if lesson_date == now.date():
+        day = 'Сегодня'
+    elif lesson_date == now.date() + timedelta(days=1):
+        day = 'Завтра'
+    else:
+        day = first_start.strftime('%d.%m.%Y')
+    rows = []
+    for index, lesson in enumerate(lessons, 1):
+        start = lesson_start(lesson, timezone).strftime('%H:%M')
+        link = lesson.get('url') or 'не указана'
+        rows.append(
+            f"{index}. {start} — {lesson['subject']}\n"
+            f"Преподаватель: {lesson['teacher']}\n"
+            f"Ссылка: {link}"
+        )
+    return f"{heading}\n📅 {day}\n\n" + '\n\n'.join(rows)
+
+
 def check_notifications(service, send_message, *, now=None):
-    now = now or datetime.now(ZoneInfo(APP_TIMEZONE))
-    if now.tzinfo is not None:
-        now = now.astimezone(ZoneInfo(APP_TIMEZONE))
+    timezone = ZoneInfo(APP_TIMEZONE)
+    now = now or datetime.now(timezone)
+    now = now.astimezone(timezone) if now.tzinfo is not None else now.replace(tzinfo=timezone)
     catalog = service.catalog()
     fingerprint = hashlib.sha256(json.dumps(catalog['schedule'], sort_keys=True).encode()).hexdigest()
     service.db.observe_schedule(fingerprint)
+    users = service.db.get_all_users()
+    lessons_by_day = {}
+    for lesson in catalog['schedule']:
+        start = lesson_start(lesson, timezone)
+        if start is None or start <= now:
+            continue
+        lessons_by_day.setdefault((lesson['date'], lesson['group']), []).append(lesson)
+    for (lesson_date, group), lessons in lessons_by_day.items():
+        lessons.sort(key=lambda item: lesson_start(item, timezone))
+        first_start = lesson_start(lessons[0], timezone)
+        if first_start - now > timedelta(hours=1):
+            continue
+        recipients = {user['user_id'] for user in users if user['group_name'] == group}
+        service.db.enqueue_notification(
+            'lessons', lesson_day_message(lessons, now, timezone),
+            f'lesson-day:{lesson_date}', recipients)
     bookings = service.db.get_all_bookings()
     for kind in ('assignments', 'topics'):
         for item in catalog[kind]:

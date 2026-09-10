@@ -78,13 +78,9 @@ async function main() {
             Number(await b.locator('#topicsCount').textContent()) - Number(await b.locator('#bookedTopicsCount').textContent()),
             Number(await b.locator('#availableTopicsCount').textContent())
         );
-        await b.evaluate(() => switchTab('queue'));
-        assert.equal(await b.locator('#queueBooked').textContent(), '1');
-        assert.equal(
-            Number(await b.locator('#queueTopicsTotal').textContent()) - Number(await b.locator('#queueBooked').textContent()),
-            Number(await b.locator('#queueFree').textContent())
-        );
-        await b.evaluate(() => switchTab('reports'));
+        assert.equal(await b.locator('.tab[data-tab="queue"]').count(), 0);
+        assert.equal(await b.locator('#queue').count(), 0);
+        checks.push('Redundant bookings tab is removed; personal reports remain in Reports');
         await c.evaluate(() => refreshState());
         await c.evaluate(() => switchTab('reports'));
         const commonC = c.locator('#topicsContainer .topic-card').filter({hasText:'Общий тестовый доклад'});
@@ -226,15 +222,19 @@ async function main() {
         checks.push('New users land in Cabinet; registration survives reload; names and allowed groups are validated');
 
         await b.evaluate(() => switchTab('notifications'));
-        assert.equal(await b.locator('.notification-item').count(), 3);
+        assert.equal(await b.locator('.notification-item').count(), 4);
         assert.equal(await b.locator('.notification-item').filter({hasText:'Общий список бронирований'}).count(), 0);
+        assert.equal(await b.getByRole('checkbox', {name:'Напоминания о парах', exact:true}).isChecked(), false);
+        await b.locator('.notification-item').filter({hasText:'Напоминания о парах'}).locator('.slider').click();
+        await b.waitForFunction(() => !busy);
         await b.locator('.notification-item').filter({hasText:'Домашние задания'}).locator('.slider').click();
         await b.waitForFunction(() => !busy);
         await b.reload();
         await b.locator('#scheduleContainer .schedule-card').first().waitFor();
         await b.evaluate(() => switchTab('notifications'));
         assert.equal(await b.getByRole('checkbox', {name:'Домашние задания', exact:true}).isChecked(), false);
-        checks.push('Only three independent notification preferences are shown and survive reload');
+        assert.equal(await b.getByRole('checkbox', {name:'Напоминания о парах', exact:true}).isChecked(), true);
+        checks.push('Four independent notification preferences are shown and survive reload');
 
         const preview = await pageFor(null, 320);
         await preview.evaluate(() => switchTab('reports'));

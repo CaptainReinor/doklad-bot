@@ -9,7 +9,7 @@ let adminTopicDrafts = [], adminAuditLog = [];
 let userData = null, isRegistered = false, isAdmin = false;
 let connected = false, busy = false, editingProfile = false;
 let editingTopics = false, editingSchedule = false, editingHomework = false, editingAudit = false;
-let mutationVersion = 0, refreshing = false, participants = 0;
+let mutationVersion = 0, refreshing = false;
 let currentScheduleFilter = "upcoming", studyTimezone = "Europe/Moscow";
 let currentTopicSubject = "all";
 
@@ -134,7 +134,6 @@ function applyState(data) {
     bookings = data.bookings;
     myBookings = bookings.filter(item => item.isMine);
     notificationSettings = data.notifications || {};
-    participants = data.participants || 0;
     connected = true;
     connectionStatus(userData
         ? `Обновлено в ${refreshedAt()} · ${userData.group_name}`
@@ -146,7 +145,6 @@ function renderAll() {
     renderTopics();
     renderHomework();
     renderMyBookings();
-    renderQueue();
     renderNotifications();
     if (!editingProfile && !editingTopics && !editingSchedule && !editingHomework && !editingAudit) renderCabinet();
     document.querySelectorAll('#cabinetContent button[type="submit"]').forEach(button => {
@@ -648,6 +646,7 @@ async function deleteLesson(lessonId) {
 const notificationTypes = [
     {id: "assignments", title: "Домашние задания", description: "Новая домашка и напоминания за день до сдачи."},
     {id: "schedule", title: "Изменения расписания", description: "Сообщение при обновлении расписания."},
+    {id: "lessons", title: "Напоминания о парах", description: "Одна сводка за день примерно за час до первой пары."},
     {id: "topics", title: "Темы докладов", description: "Новые темы одной подборкой и напоминания о сроках."}
 ];
 
@@ -768,22 +767,6 @@ async function deleteAssignment(assignmentId) {
 }
 
 function closeHomeworkEditor() { editingHomework = false; renderCabinet(); }
-
-function renderQueue() {
-    document.getElementById("queueTotal").textContent = connected ? participants : "—";
-    document.getElementById("queueBooked").textContent = connected
-        ? new Set(bookings.map(item => item.id)).size : "—";
-    const occupiedIds = new Set(bookings.map(item => item.id));
-    document.getElementById("queueFree").textContent = isRegistered
-        ? topicsData.filter(topic => !occupiedIds.has(topic.id)).length : "—";
-    const topicTotal = document.getElementById("queueTopicsTotal");
-    if (topicTotal) topicTotal.textContent = topicsData.length;
-    document.getElementById("queueList").innerHTML = bookings.length ? bookings.map(b => `<article class="topic-card">
-        <div class="topic-title">${escapeHtml(b.title)}</div>
-        <div class="booking-owner" title="${escapeHtml(b.subject || "Предмет не указан")}">📘 ${escapeHtml(shortSubject(b.subject))}</div>
-        <div class="booking-owner">👥 ${escapeHtml(b.group)} · ${escapeHtml(b.user)}</div></article>`).join("")
-        : `<div class="empty-state">${connected ? "Пока нет бронирований." : "Для просмотра бронирований откройте приложение через бота."}</div>`;
-}
 
 document.addEventListener("DOMContentLoaded", async () => {
     setupFilters();
@@ -1261,7 +1244,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     function switchTab(tabName) {
 
-        if (!["schedule", "homework", "reports", "cabinet", "notifications", "queue"].includes(tabName)) return;
+        if (!["schedule", "homework", "reports", "cabinet", "notifications"].includes(tabName)) return;
         document
             .querySelectorAll(".tab-content")
             .forEach(section => {

@@ -783,53 +783,6 @@
             transform: translateX(19px);
         }
 
-        /* QUEUE */
-
-        .queue-card {
-            padding: 18px;
-            text-align: center;
-        }
-
-        .queue-icon {
-            margin-bottom: 8px;
-            font-size: 35px;
-        }
-
-        .queue-number {
-            font-size: 42px;
-            line-height: 1;
-            font-weight: 750;
-        }
-
-        .queue-label {
-            margin: 7px 0 17px;
-            color: var(--hint);
-            font-size: 12px;
-        }
-
-        .queue-stats {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 8px;
-            margin-top: 15px;
-        }
-
-        .queue-stat {
-            padding: 11px 7px;
-            border-radius: 11px;
-            background: rgba(127, 127, 127, 0.06);
-        }
-
-        .queue-stat strong {
-            display: block;
-            font-size: 18px;
-        }
-
-        .queue-stat span {
-            color: var(--hint);
-            font-size: 10px;
-        }
-
         /* PROFILE / FORMS */
 
         .profile-card {
@@ -1066,18 +1019,6 @@
                 padding: 6px 7px;
             }
 
-            .queue-stats {
-                gap: 5px;
-            }
-
-            .queue-stat {
-                padding: 9px 4px;
-            }
-
-            .queue-number {
-                font-size: 38px;
-            }
-
             .booking-actions {
                 flex-direction: column;
             }
@@ -1106,9 +1047,6 @@
                 min-height: 70px;
             }
 
-            .queue-stats {
-                grid-template-columns: 1fr;
-            }
         }
 
         /* DARK MODE FALLBACK */
@@ -1249,13 +1187,6 @@
                 🔔 Уведомления
             </button>
 
-            <button
-                class="tab"
-                data-tab="queue"
-                onclick="switchTab('queue')"
-            >
-                👥 Бронирования
-            </button>
         </nav>
     </div>
 
@@ -1564,79 +1495,6 @@
         ></div>
     </section>
 
-
-    <!-- ==================== ОЧЕРЕДЬ ==================== -->
-
-    <section
-        id="queue"
-        class="tab-content"
-    >
-        <h2 class="section-title">
-            👥 Бронирования
-        </h2>
-
-        <p class="section-subtitle">
-            Общий список бронирований по группам
-        </p>
-
-        <div class="queue-card card">
-
-            <div class="queue-icon">
-                👥
-            </div>
-
-            <div
-                class="queue-number"
-                id="queueTotal"
-            >
-                0
-            </div>
-
-            <div class="queue-label">
-                студентов выбрали темы
-            </div>
-
-            <div class="queue-stats">
-
-                <div class="queue-stat">
-                    <strong
-                        id="queueBooked"
-                    >
-                        0
-                    </strong>
-
-                    <span>
-                        тем занято
-                    </span>
-                </div>
-
-                <div class="queue-stat">
-                    <strong
-                        id="queueFree"
-                    >
-                        0
-                    </strong>
-
-                    <span>
-                        свободных тем
-                    </span>
-                </div>
-
-                <div class="queue-stat">
-                    <strong id="queueTopicsTotal">
-                        10
-                    </strong>
-
-                    <span>
-                        всего тем
-                    </span>
-                </div>
-
-            </div>
-        </div>
-        <div id="queueList" class="topics-list"></div>
-    </section>
-
 </div>
 
 
@@ -1644,7 +1502,7 @@
 
 
 <script src="config.js?v=20260905-2"></script>
-<script src="app.js?v=20260905-4" defer></script>
+<script src="app.js?v=20260910-1" defer></script>
 
 </body>
 </html>
