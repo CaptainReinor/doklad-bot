@@ -333,12 +333,13 @@ def test_four_notification_toggles_and_homework_edits_are_silent(service):
     assert service.db.claim_notifications() == []
 
 
-def test_lesson_reminder_is_one_daily_group_digest_with_full_details(service):
+def test_lesson_reminder_is_one_daily_common_digest_with_full_details(service):
     register(service, 1, group='МН-4-25-01')
     register(service, 2, group='МН-4-25-02')
     service.perform(1, {'action': 'notification_settings', 'type': 'lessons', 'enabled': True})
+    service.perform(2, {'action': 'notification_settings', 'type': 'lessons', 'enabled': True})
     assert service.db.get_notification_settings(1)['lessons'] is True
-    assert service.db.get_notification_settings(2)['lessons'] is False
+    assert service.db.get_notification_settings(2)['lessons'] is True
 
     lessons = [item for item in service.catalog()['schedule']
                if item['date'] == '05.09.2026' and item['group'] == 'МН-4-25-01']
@@ -358,15 +359,16 @@ def test_lesson_reminder_is_one_daily_group_digest_with_full_details(service):
     check_notifications(service, sender, now=datetime(2026, 9, 5, 13, 59))
     assert sent == []
     check_notifications(service, sender, now=datetime(2026, 9, 5, 14, 0))
-    assert len(sent) == 1 and sent[0][0] == 1
+    assert len(sent) == 2 and {item[0] for item in sent} == {1, 2}
     message = sent[0][1]
+    assert sent[1][1] == message
     assert lessons[0]['subject'] in message and lessons[0]['teacher'] in message
     assert '15:00' in message and '16:30' in message
     assert all(url in message for url in urls)
 
     # The second consecutive class must not create another notification that day.
     check_notifications(service, sender, now=datetime(2026, 9, 5, 15, 30))
-    assert len(sent) == 1
+    assert len(sent) == 2
     assert Database(service.db.path).get_notification_settings(1)['lessons'] is True
 
 
@@ -504,7 +506,7 @@ def test_admin_schedule_management_and_validation(service):
     original_count = len(service.catalog()['schedule'])
     lesson = {'date': '07.09.2026', 'time': '18:30-19:50', 'type': 'ПЗ',
               'subject': 'Новая дисциплина', 'teacher': 'Иванов И.И.',
-              'room': 'СДО', 'group': 'мн - 4 - 25 - 01',
+              'room': 'СДО',
               'url': 'https://example.edu/lesson/123'}
     with pytest.raises(ActionError) as forbidden:
         service.perform(1, {'action': 'create_lesson', **lesson})
@@ -512,7 +514,7 @@ def test_admin_schedule_management_and_validation(service):
     service.perform(ADMIN, {'action': 'create_lesson', **lesson})
     created = next(item for item in service.catalog()['schedule'] if item['subject'] == 'Новая дисциплина')
     assert created['day'] == 'Пн.' and created['time'] == '18.30–19.50'
-    assert created['group'] == 'МН-4-25-01'
+    assert created['group'] == ''
     assert created['url'] == 'https://example.edu/lesson/123'
     assert len(service.catalog()['schedule']) == original_count + 1
     service.perform(ADMIN, {'action': 'update_lesson', 'lessonId': created['id'],

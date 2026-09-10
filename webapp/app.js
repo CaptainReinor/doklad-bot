@@ -616,7 +616,6 @@ function lessonFields(prefix, lesson = {}) {
         <div class="wide"><label class="form-label" for="${prefix}-subject">Дисциплина</label><input class="form-control" id="${prefix}-subject" list="scheduleSubjectSuggestions" maxlength="200" value="${escapeHtml(lesson.subject || "")}" placeholder="Выберите или введите дисциплину" oninput="fillTeacherFromSubject('${prefix}')"></div>
         <div><label class="form-label" for="${prefix}-teacher">Преподаватель</label><input class="form-control" id="${prefix}-teacher" maxlength="100" value="${escapeHtml(lesson.teacher || "")}"></div>
         <div><label class="form-label" for="${prefix}-room">Аудитория</label><input class="form-control" id="${prefix}-room" maxlength="100" value="${escapeHtml(lesson.room || "")}"></div>
-        <div><label class="form-label" for="${prefix}-group">Группа</label><input class="form-control" id="${prefix}-group" maxlength="40" value="${escapeHtml(lesson.group || "МН-4-25-01")}"></div>
         <div class="wide"><label class="form-label" for="${prefix}-url">Ссылка, необязательно</label><input class="form-control" type="url" id="${prefix}-url" maxlength="1000" placeholder="https://..." value="${escapeHtml(lesson.url || "")}"></div>
     </div>`;
 }
@@ -629,7 +628,6 @@ function lessonPayload(prefix) {
         subject: document.getElementById(`${prefix}-subject`).value.trim(),
         teacher: document.getElementById(`${prefix}-teacher`).value.trim(),
         room: document.getElementById(`${prefix}-room`).value.trim(),
-        group: document.getElementById(`${prefix}-group`).value.trim(),
         url: document.getElementById(`${prefix}-url`).value.trim()};
 }
 
@@ -1335,7 +1333,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         wrapper.style.cssText = "width:100%;padding:0;background:#fff;color:#172033;font:12px Arial,sans-serif;";
         const cell = "border:1px solid #cbd5e1;padding:8px;vertical-align:top;overflow-wrap:break-word;";
         wrapper.innerHTML = `<h1 style="font-size:24px;margin:0 0 8px">Расписание</h1>
-            <p style="margin:0 0 16px">МН-4-25-01 · иностранный язык по расписанию МН-4-25-02<br>
+            <p style="margin:0 0 16px">Общее расписание<br>
             Занятий в выгрузке: ${items.length}. Время: ${escapeHtml(studyTimezone)}.</p>
             <table style="width:100%;border-collapse:collapse;table-layout:fixed;font:12px Arial,sans-serif;color:#172033">
             <colgroup><col style="width:14%"><col style="width:17%"><col style="width:47%"><col style="width:22%"></colgroup>
@@ -1349,7 +1347,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         // produces blank leading pages and cropped content in html2canvas.
         try {
             await html2pdf().set({
-                margin: 10, filename: "расписание-МН-4-25-01.pdf",
+                margin: 10, filename: "расписание.pdf",
                 image: {type: "jpeg", quality: 0.98},
                 html2canvas: {scale: 2, backgroundColor: "#ffffff", scrollX: 0, scrollY: 0},
                 jsPDF: {unit: "mm", format: "a4", orientation: "portrait"},

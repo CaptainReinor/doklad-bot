@@ -76,13 +76,13 @@ def check_notifications(service, send_message, *, now=None):
         start = lesson_start(lesson, timezone)
         if start is None or start <= now:
             continue
-        lessons_by_day.setdefault((lesson['date'], lesson['group']), []).append(lesson)
-    for (lesson_date, group), lessons in lessons_by_day.items():
+        lessons_by_day.setdefault(lesson['date'], []).append(lesson)
+    for lesson_date, lessons in lessons_by_day.items():
         lessons.sort(key=lambda item: lesson_start(item, timezone))
         first_start = lesson_start(lessons[0], timezone)
         if first_start - now > timedelta(hours=1):
             continue
-        recipients = {user['user_id'] for user in users if user['group_name'] == group}
+        recipients = {user['user_id'] for user in users}
         service.db.enqueue_notification(
             'lessons', lesson_day_message(lessons, now, timezone),
             f'lesson-day:{lesson_date}', recipients)

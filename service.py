@@ -117,7 +117,9 @@ class Service:
             'subject': clean_text(data.get('subject'), 'название дисциплины', 3, 200),
             'teacher': clean_text(data.get('teacher'), 'преподавателя', 2, 100),
             'room': clean_text(data.get('room'), 'аудиторию', 1, 100),
-            'group': clean_group(data.get('group')),
+            # The timetable is shared by both student groups.  Keep the legacy
+            # database column empty so old deployments can migrate in place.
+            'group': '',
             'url': meeting_url
         }
 

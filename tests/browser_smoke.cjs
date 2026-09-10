@@ -44,6 +44,7 @@ async function main() {
         await a.waitForFunction(() => !refreshing);
         assert.match(await a.locator('#connectionStatusText').textContent(), /Обновлено в \d{2}:\d{2}/);
         checks.push('Manual refresh reports the time of the latest successful update');
+        assert.equal((await a.locator('#schedule .section-subtitle').textContent()).trim(), 'Общее расписание занятий');
         assert.equal(await a.locator('#totalClasses').textContent(), '44');
         // Fix the browser clock to the morning of a day with two later lessons.
         await a.clock.install({time: new Date('2026-09-05T10:00:00+03:00')});
@@ -237,7 +238,7 @@ async function main() {
         await admin.locator('#newLesson-subject').fill('Управление бизнес-процессами');
         assert.equal(await admin.locator('#newLesson-teacher').inputValue(), 'Золотухин В.А.');
         await admin.locator('#newLesson-room').fill('СДО');
-        await admin.locator('#newLesson-group').fill('МН-4-25-01');
+        assert.equal(await admin.locator('#newLesson-group').count(), 0);
         await admin.locator('#newLesson-url').fill('https://example.edu/lesson/123');
         await admin.getByRole('button', {name:'Добавить занятие'}).click();
         await admin.locator('.admin-record').filter({hasText:'31.12.2026'}).waitFor();
@@ -247,7 +248,7 @@ async function main() {
         assert.equal(await linkedLesson.count(), 1);
         assert.equal(await linkedLesson.getByRole('link', {name:'🔗 Подключиться к паре'}).getAttribute('href'), 'https://example.edu/lesson/123');
         assert.equal(await b.locator('#scheduleContainer .schedule-card').filter({hasText:'08.09.2026'}).getByRole('link', {name:/Подключиться/}).count(), 0);
-        checks.push('Admin-created schedule link appears as a button only on the linked lesson');
+        checks.push('Schedule is common to both groups; admin-created link appears only on the linked lesson');
         await admin.screenshot({path:path.join(artifacts, 'admin-tools-desktop.png'), fullPage:true});
 
         const newcomer = await pageFor(104);
