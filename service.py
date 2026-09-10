@@ -210,6 +210,7 @@ class Service:
             ]} for topic in all_topics]
             result['adminLessons'] = self.db.get_lessons(include_inactive=True)
             result['adminAssignments'] = self.db.get_assignments()
+            result['adminStats'] = self.db.get_admin_stats()
             result['topicDrafts'] = [{
                 'id': row['id'], 'title': row['title'], 'subject': row['subject'],
                 'deadline': row['deadline'], 'isCommon': row['is_common'],
@@ -221,6 +222,9 @@ class Service:
                 'actor': row['actor_name'], 'createdAt': row['created_at']
             } for row in self.db.get_audit_log()]
         return result
+
+    def record_visit(self, user_id):
+        return self.db.record_visit(user_id)
 
     def perform(self, user_id, data, telegram_user=None):
         if not isinstance(data, dict):

@@ -1106,6 +1106,18 @@
         .audit-item > div { display: flex; justify-content: space-between; gap: 10px; }
         .audit-item span, .audit-item time { color: var(--hint); font-size: 11px; }
         .audit-item p { margin: 7px 0 4px; }
+        .admin-stats-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 14px 0 22px; }
+        .activity-chart-scroll { overflow-x: auto; margin: 10px 0 24px; padding: 14px 8px 4px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card-bg); }
+        .activity-chart { display: grid; grid-template-columns: repeat(30, minmax(28px, 1fr)); align-items: end; gap: 5px; min-width: 960px; height: 205px; }
+        .activity-column { height: 190px; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; }
+        .activity-value { min-height: 16px; color: var(--hint); font-size: 10px; font-variant-numeric: tabular-nums; }
+        .activity-bar { width: 100%; max-width: 24px; min-height: 3px; border-radius: 7px 7px 2px 2px; background: linear-gradient(180deg, #7c5cff, #2481cc); }
+        .activity-date { min-height: 15px; color: var(--hint); font-size: 9px; white-space: nowrap; }
+        .admin-notification-stats { display: grid; gap: 9px; margin: 10px 0 20px; }
+        .admin-notification-stat { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--card-bg); }
+        .admin-notification-stat strong, .admin-notification-stat span { display: block; }
+        .admin-notification-stat span { margin-top: 3px; color: var(--hint); font-size: 11px; }
+        .admin-notification-stat b { color: var(--primary); font-size: 18px; }
         .empty-state.compact { margin-top: 12px; padding: 12px; }
         .topic-title, .profile-name, .value { overflow-wrap: anywhere; }
         button:disabled { opacity: .55; cursor: not-allowed; }
@@ -1114,6 +1126,7 @@
             .lesson-fields .wide { grid-column: auto; }
             .admin-booking { align-items: flex-start; flex-direction: column; }
             .deadline-control-row { grid-template-columns: 1fr; }
+            .admin-stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
     </style>
 </head>
@@ -1502,7 +1515,7 @@
 
 
 <script src="config.js?v=20260905-2"></script>
-<script src="app.js?v=20260910-1" defer></script>
+<script src="app.js?v=20260910-2" defer></script>
 
 </body>
 </html>

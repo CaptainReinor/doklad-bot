@@ -205,7 +205,7 @@ def test_v7_migration_preserves_cross_group_bookings_and_locks_topic(tmp_path):
     topic = db.get_topic(1)
     assert topic['is_common'] is True and topic['is_multi'] is False
     assert len(db.get_all_bookings()) == 2
-    assert sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0] == 10
+    assert sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0] == 11
 
 
 def test_db_location_does_not_follow_cwd(db, monkeypatch, tmp_path):
@@ -574,3 +574,38 @@ def test_invalid_notification_type_does_not_crash(client, service, headers, kind
     register(service)
     response = client.post('/api/action', json={'action': 'notification_settings', 'type': kind, 'enabled': True}, headers=headers())
     assert response.status_code == 400
+
+
+def test_aggregate_admin_stats_counts_sessions_and_notification_preferences(client, service, headers):
+    register(service, 1)
+    register(service, 2, 'МН-4-25-02')
+    service.db.set_notification(1, 'lessons', True)
+    service.db.set_notification(2, 'assignments', False)
+
+    assert client.post('/api/visit').status_code == 401
+    assert client.post('/api/visit', json={}, headers=headers(1)).status_code == 200
+    with service.db.connection() as conn:
+        conn.execute('DELETE FROM activity_daily')
+
+    first = datetime(2026, 9, 9, 10, 0, tzinfo=timezone.utc)
+    assert service.db.record_visit(1, first) is True
+    assert service.db.record_visit(1, datetime(2026, 9, 9, 10, 20, tzinfo=timezone.utc)) is False
+    assert service.db.record_visit(1, datetime(2026, 9, 9, 11, 0, tzinfo=timezone.utc)) is True
+    assert service.db.record_visit(2, datetime(2026, 9, 9, 11, 5, tzinfo=timezone.utc)) is True
+    assert service.db.record_visit(1, datetime(2026, 9, 10, 7, 0, tzinfo=timezone.utc)) is True
+
+    stats = service.db.get_admin_stats(today='2026-09-10')
+    assert len(stats['dailyVisits']) == 30
+    assert stats['dailyVisits'][-2:] == [
+        {'date': '2026-09-09', 'visits': 3}, {'date': '2026-09-10', 'visits': 1}]
+    assert stats['visitsToday'] == 1
+    assert stats['visits7Days'] == 4
+    assert stats['visits30Days'] == 4
+    assert stats['registeredUsers'] == 2
+    preferences = {item['kind']: item for item in stats['notifications']}
+    assert preferences['assignments'] == {'kind': 'assignments', 'enabled': 1, 'percent': 50}
+    assert preferences['topics']['enabled'] == 2
+    assert preferences['schedule']['enabled'] == 2
+    assert preferences['lessons'] == {'kind': 'lessons', 'enabled': 1, 'percent': 50}
+    assert 'adminStats' in service.state(ADMIN)
+    assert 'adminStats' not in service.state(1)

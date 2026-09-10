@@ -3,11 +3,12 @@ import sqlite3
 import time
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from catalog import NOTIFICATION_DEFAULTS, load_catalog
-from settings import DATABASE_PATH, TOPIC_NOTIFICATION_BATCH_DELAY
+from settings import APP_TIMEZONE, DATABASE_PATH, TOPIC_NOTIFICATION_BATCH_DELAY
 
 
 class BookingConflict(ValueError):
@@ -187,6 +188,12 @@ class Database:
                 entity_id INTEGER,
                 summary TEXT NOT NULL,
                 created_at TEXT NOT NULL)''')
+            conn.execute('''CREATE TABLE IF NOT EXISTS activity_daily (
+                activity_date TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                visits INTEGER NOT NULL DEFAULT 1,
+                last_seen REAL NOT NULL,
+                PRIMARY KEY(activity_date, user_id))''')
             if schema_version < 6:
                 conn.execute("DELETE FROM deadlines WHERE kind='assignments'")
                 conn.execute('''UPDATE notification_jobs SET sent_at=?
@@ -200,7 +207,7 @@ class Database:
                         (kind='assignments' AND event_key NOT LIKE 'deadline:%'))''',
                              (migration_time,))
                 conn.execute("DELETE FROM notification_settings WHERE kind IN ('bookings', 'queue')")
-            conn.execute('PRAGMA user_version=10')
+            conn.execute('PRAGMA user_version=11')
 
     @staticmethod
     def _user(conn, user_id):
@@ -214,6 +221,71 @@ class Database:
     def get_all_users(self):
         with self.connection() as conn:
             return [dict(r) for r in conn.execute('SELECT * FROM users ORDER BY registered_at, user_id')]
+
+    def record_visit(self, user_id, observed_at=None, *, session_timeout=1800):
+        """Count a new visit after inactivity without counting background polling."""
+        if type(user_id) is not int:
+            raise ValueError('Некорректный пользователь.')
+        if observed_at is None:
+            moment = datetime.now(timezone.utc)
+        elif isinstance(observed_at, datetime):
+            moment = observed_at if observed_at.tzinfo else observed_at.replace(tzinfo=ZoneInfo(APP_TIMEZONE))
+        else:
+            moment = datetime.fromtimestamp(float(observed_at), timezone.utc)
+        observed_ts = moment.timestamp()
+        activity_date = moment.astimezone(ZoneInfo(APP_TIMEZONE)).date().isoformat()
+        with self.connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            row = conn.execute('''SELECT visits, last_seen FROM activity_daily
+                WHERE activity_date=? AND user_id=?''', (activity_date, user_id)).fetchone()
+            if row is None:
+                conn.execute('''INSERT INTO activity_daily (activity_date, user_id, visits, last_seen)
+                    VALUES (?, ?, 1, ?)''', (activity_date, user_id, observed_ts))
+                return True
+            is_new_visit = observed_ts - row['last_seen'] >= session_timeout
+            conn.execute('''UPDATE activity_daily SET visits=visits+?, last_seen=?
+                WHERE activity_date=? AND user_id=?''',
+                         (int(is_new_visit), max(observed_ts, row['last_seen']), activity_date, user_id))
+            return is_new_visit
+
+    def get_admin_stats(self, *, days=30, today=None):
+        if not isinstance(days, int) or not 1 <= days <= 366:
+            raise ValueError('Некорректный период статистики.')
+        if today is None:
+            current_day = datetime.now(ZoneInfo(APP_TIMEZONE)).date()
+        elif isinstance(today, datetime):
+            current_day = today.astimezone(ZoneInfo(APP_TIMEZONE)).date() if today.tzinfo else today.date()
+        elif isinstance(today, date):
+            current_day = today
+        else:
+            current_day = date.fromisoformat(str(today))
+        first_day = current_day - timedelta(days=days - 1)
+        with self.connection() as conn:
+            daily_rows = {row['activity_date']: row['visits'] for row in conn.execute(
+                '''SELECT activity_date, SUM(visits) AS visits FROM activity_daily
+                   WHERE activity_date BETWEEN ? AND ? GROUP BY activity_date''',
+                (first_day.isoformat(), current_day.isoformat()))}
+            user_ids = [row['user_id'] for row in conn.execute('SELECT user_id FROM users')]
+            enabled_counts = {kind: 0 for kind in NOTIFICATION_DEFAULTS}
+            for user_id in user_ids:
+                for kind, enabled in self._settings(conn, user_id).items():
+                    enabled_counts[kind] += int(enabled)
+        daily = [{'date': (first_day + timedelta(days=offset)).isoformat(),
+                  'visits': int(daily_rows.get((first_day + timedelta(days=offset)).isoformat(), 0))}
+                 for offset in range(days)]
+        total_users = len(user_ids)
+        return {
+            'registeredUsers': total_users,
+            'visitsToday': daily[-1]['visits'],
+            'visits7Days': sum(row['visits'] for row in daily[-7:]),
+            'visits30Days': sum(row['visits'] for row in daily),
+            'dailyVisits': daily,
+            'notifications': [
+                {'kind': kind, 'enabled': enabled_counts[kind],
+                 'percent': round(enabled_counts[kind] * 100 / total_users) if total_users else 0}
+                for kind in NOTIFICATION_DEFAULTS
+            ]
+        }
 
     def save_user(self, user_id, first_name, last_name, group_name, username=''):
         try:

@@ -86,10 +86,16 @@ def create_app(*, token=None, db_path=DATABASE_PATH, service=None):
     def state():
         return jsonify(service.state(g.telegram_user['id']))
 
+    @app.post('/api/visit')
+    def visit():
+        service.record_visit(g.telegram_user['id'])
+        return jsonify(status='ok')
+
     @app.post('/api/action')
     def action():
         data = request.get_json(silent=True)
         user_id = g.telegram_user['id']
+        service.record_visit(user_id)
         message = service.perform(user_id, data, g.telegram_user)
         return jsonify(message=message, state=service.state(user_id),
                        catalog=service.catalog(user_id, public=True))

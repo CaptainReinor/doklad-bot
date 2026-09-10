@@ -5,10 +5,10 @@ const apiBase = (window.APP_CONFIG?.apiBaseUrl || window.location.origin).replac
 let scheduleData = [], topicsData = [], assignmentsData = [];
 let bookings = [], myBookings = [], notificationSettings = {};
 let adminTopics = [], adminLessons = [], adminAssignments = [];
-let adminTopicDrafts = [], adminAuditLog = [];
+let adminTopicDrafts = [], adminAuditLog = [], adminStats = null;
 let userData = null, isRegistered = false, isAdmin = false;
 let connected = false, busy = false, editingProfile = false;
-let editingTopics = false, editingSchedule = false, editingHomework = false, editingAudit = false;
+let editingTopics = false, editingSchedule = false, editingHomework = false, editingAudit = false, editingStats = false;
 let mutationVersion = 0, refreshing = false;
 let currentScheduleFilter = "upcoming", studyTimezone = "Europe/Moscow";
 let currentTopicSubject = "all";
@@ -131,6 +131,7 @@ function applyState(data) {
     adminAssignments = isAdmin && Array.isArray(data.adminAssignments) ? data.adminAssignments : [];
     adminTopicDrafts = isAdmin && Array.isArray(data.topicDrafts) ? data.topicDrafts : [];
     adminAuditLog = isAdmin && Array.isArray(data.auditLog) ? data.auditLog : [];
+    adminStats = isAdmin && data.adminStats && typeof data.adminStats === "object" ? data.adminStats : null;
     bookings = data.bookings;
     myBookings = bookings.filter(item => item.isMine);
     notificationSettings = data.notifications || {};
@@ -146,7 +147,8 @@ function renderAll() {
     renderHomework();
     renderMyBookings();
     renderNotifications();
-    if (!editingProfile && !editingTopics && !editingSchedule && !editingHomework && !editingAudit) renderCabinet();
+    if (editingStats) renderAdminStats();
+    else if (!editingProfile && !editingTopics && !editingSchedule && !editingHomework && !editingAudit) renderCabinet();
     document.querySelectorAll('#cabinetContent button[type="submit"]').forEach(button => {
         button.disabled = !connected || busy;
     });
@@ -372,6 +374,7 @@ function renderCabinet() {
             <button class="btn btn-primary" onclick="renderTopicEditor()">📚 Управление темами</button>
             <button class="btn btn-primary" onclick="renderHomeworkEditor()">📝 Управление домашкой</button>
             <button class="btn btn-primary" onclick="renderScheduleEditor()">🗓 Управление расписанием</button>
+            <button class="btn btn-primary" onclick="renderAdminStats()">📊 Статистика</button>
             <button class="btn btn-outline" onclick="renderAuditLog()">🕘 История действий</button>
             </div></div>` : ""}`;
 }
@@ -387,6 +390,7 @@ function renderTopicEditor() {
     editingSchedule = false;
     editingHomework = false;
     editingAudit = false;
+    editingStats = false;
     editingTopics = true;
     const subjectOptions = [...new Set(scheduleData.map(item => item.subject).filter(Boolean))]
         .sort((a, b) => shortSubject(a).localeCompare(shortSubject(b), "ru"));
@@ -598,6 +602,7 @@ function renderScheduleEditor() {
     editingTopics = false;
     editingHomework = false;
     editingAudit = false;
+    editingStats = false;
     editingSchedule = true;
     const todayStart = calendarTime(studyToday());
     const lessons = [...adminLessons].sort((a, b) => {
@@ -650,6 +655,61 @@ const notificationTypes = [
     {id: "topics", title: "Темы докладов", description: "Новые темы одной подборкой и напоминания о сроках."}
 ];
 
+function renderAdminStats() {
+    if (!isAdmin) return;
+    editingProfile = false;
+    editingTopics = false;
+    editingSchedule = false;
+    editingHomework = false;
+    editingAudit = false;
+    editingStats = true;
+    const stats = adminStats || {registeredUsers: 0, visitsToday: 0, visits7Days: 0,
+        visits30Days: 0, dailyVisits: [], notifications: []};
+    const daily = Array.isArray(stats.dailyVisits) ? stats.dailyVisits : [];
+    const maximum = Math.max(1, ...daily.map(item => Number(item.visits) || 0));
+    const notificationNames = Object.fromEntries(notificationTypes.map(item => [item.id, item.title]));
+    const chart = daily.map((item, index) => {
+        const visits = Number(item.visits) || 0;
+        const [year, month, day] = String(item.date).split("-");
+        const label = `${day}.${month}`;
+        const showLabel = index % 5 === 0 || index === daily.length - 1;
+        const height = visits ? Math.max(8, Math.round(visits * 150 / maximum)) : 3;
+        return `<div class="activity-column" title="${escapeHtml(`${day}.${month}.${year}: ${visits} входов`)}">
+            <span class="activity-value">${visits}</span>
+            <div class="activity-bar" style="height:${height}px"></div>
+            <span class="activity-date">${showLabel ? escapeHtml(label) : ""}</span>
+        </div>`;
+    }).join("");
+    const notificationRows = (Array.isArray(stats.notifications) ? stats.notifications : []).map(item => `
+        <div class="admin-notification-stat">
+            <div><strong>${escapeHtml(notificationNames[item.kind] || item.kind)}</strong>
+            <span>${Number(item.enabled) || 0} из ${Number(stats.registeredUsers) || 0} пользователей</span></div>
+            <b>${Number(item.percent) || 0}%</b>
+        </div>`).join("");
+    document.getElementById("cabinetContent").innerHTML = `<div class="profile-card card admin-editor">
+        <h3 class="section-title">Статистика</h3>
+        <p class="draft-help">Общие показатели без фамилий и персональной истории.</p>
+        <div class="stats-grid admin-stats-grid">
+            <div class="stat-card"><div class="number">${Number(stats.registeredUsers) || 0}</div><div class="label">Пользователей</div></div>
+            <div class="stat-card"><div class="number">${Number(stats.visitsToday) || 0}</div><div class="label">Входов сегодня</div></div>
+            <div class="stat-card"><div class="number">${Number(stats.visits7Days) || 0}</div><div class="label">Входов за 7 дней</div></div>
+            <div class="stat-card"><div class="number">${Number(stats.visits30Days) || 0}</div><div class="label">Входов за 30 дней</div></div>
+        </div>
+        <h4>Входы по дням</h4>
+        <p class="draft-help">Новый сеанс считается после 30 минут бездействия. Простое открытие чата без команды Telegram не передаёт.</p>
+        <div class="activity-chart-scroll"><div class="activity-chart" role="img" aria-label="График входов за 30 дней">${chart}</div></div>
+        <h4>Включённые уведомления</h4>
+        <div class="admin-notification-stats">${notificationRows || '<div class="empty-state compact">Нет данных.</div>'}</div>
+        <button class="btn btn-secondary" onclick="closeAdminStats()">Вернуться в кабинет</button>
+    </div>`;
+    requestAnimationFrame(() => {
+        const scroller = document.querySelector(".activity-chart-scroll");
+        if (scroller) scroller.scrollLeft = scroller.scrollWidth;
+    });
+}
+
+function closeAdminStats() { editingStats = false; renderCabinet(); }
+
 function renderNotifications() {
     document.getElementById("notificationsContainer").innerHTML = notificationTypes.map(item => `
         <div class="notification-item"><div class="notification-info">
@@ -683,6 +743,7 @@ function renderHomeworkEditor() {
     editingTopics = false;
     editingSchedule = false;
     editingAudit = false;
+    editingStats = false;
     editingHomework = true;
     document.getElementById("cabinetContent").innerHTML = `<div class="profile-card card admin-editor">
         <h3 class="section-title">Управление домашкой</h3>
@@ -717,6 +778,7 @@ function renderAuditLog() {
     editingTopics = false;
     editingSchedule = false;
     editingHomework = false;
+    editingStats = false;
     editingAudit = true;
     const actionNames = {create: "Создание", update: "Изменение", delete: "Удаление",
         archive: "Архив", restore: "Восстановление", deadline: "Срок",
@@ -772,7 +834,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     setupFilters();
     try {
         applyCatalog(await api("catalog"));
-        if (tg?.initData) { applyState(await api("state")); }
+        if (tg?.initData) {
+            await api("visit", {});
+            applyState(await api("state"));
+        }
         else connectionStatus("Режим просмотра. Для регистрации и бронирования откройте приложение через кнопку бота.", true);
     } catch (error) {
         connectionStatus(error.message + " Показаны исходные учебные данные; актуальные сроки загрузятся при подключении.", true);

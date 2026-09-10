@@ -52,6 +52,10 @@ def create_bot(service, token, *, threaded=True, web_app_url=WEB_APP_URL):
         if message.chat.type != 'private' or not message.from_user:
             send(message.chat.id, 'Откройте личный чат с ботом и отправьте /start.')
             return False
+        try:
+            service.record_visit(message.from_user.id)
+        except Exception as exc:
+            logger.warning('Could not record bot activity: %s', type(exc).__name__)
         return True
 
     def admin(message):
@@ -137,9 +141,12 @@ def create_bot(service, token, *, threaded=True, web_app_url=WEB_APP_URL):
         if not admin(message):
             return
         users, bookings = service.db.get_all_users(), service.db.get_all_bookings()
+        activity = service.db.get_admin_stats()
         groups = sorted({u['group_name'] for u in users})
         booked_topics = {row['topic'] for row in bookings}
-        text = (f'📊 Студентов: {len(users)}\nТем: {len(service.catalog()["topics"])}\n'
+        text = (f'📊 Студентов: {len(users)}\nВходов сегодня: {activity["visitsToday"]}\n'
+                f'Входов за 7 дней: {activity["visits7Days"]}\n'
+                f'Тем: {len(service.catalog()["topics"])}\n'
                 f'Занятых тем: {len(booked_topics)}\nВыступающих: {len(bookings)}\n')
         for group in groups:
             group_bookings = [row for row in bookings if row['group_name'] == group]

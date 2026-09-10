@@ -118,6 +118,19 @@ async function main() {
 
         const admin = await pageFor(900, 1280);
         await admin.evaluate(() => switchTab('cabinet'));
+        await admin.getByRole('button', {name:'📊 Статистика'}).click();
+        assert.equal(await admin.locator('.activity-column').count(), 30);
+        assert.equal(await admin.locator('.admin-notification-stat').count(), 4);
+        assert.match(await admin.locator('#cabinetContent').textContent(), /Входов сегодня/);
+        assert.equal(await admin.locator('#cabinetContent').textContent().then(text => /Иванов|Петров/.test(text)), false);
+        await admin.screenshot({path:path.join(artifacts, 'admin-stats-desktop.png'), fullPage:true});
+        const mobileStats = await pageFor(900);
+        await mobileStats.evaluate(() => switchTab('cabinet'));
+        await mobileStats.getByRole('button', {name:'📊 Статистика'}).click();
+        assert.equal(await mobileStats.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), true);
+        await mobileStats.screenshot({path:path.join(artifacts, 'admin-stats-mobile.png'), fullPage:true});
+        checks.push('Admin analytics shows aggregate daily visits and notification adoption without personal history');
+        await admin.getByRole('button', {name:'Вернуться в кабинет'}).click();
         assert.equal(await admin.getByRole('button', {name:/Управление сроками/}).count(), 0);
         await admin.getByRole('button', {name:'📝 Управление домашкой'}).click();
         assert.match(await admin.locator('#cabinetContent').textContent(), /Домашних заданий пока нет/);

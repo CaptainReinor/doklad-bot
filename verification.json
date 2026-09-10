@@ -1,6 +1,6 @@
 {
-  "python_tests_passed": 78,
-  "browser_scenarios_passed": 18,
+  "python_tests_passed": 79,
+  "browser_scenarios_passed": 19,
   "javascript_errors": 0,
   "original_config_identical": false,
   "original_database_identical": true,
@@ -9,5 +9,5 @@
   "topics_preserved": 10,
   "legacy_assignments_removed": 4,
   "live_telegram_tested": false,
-  "deployed": false
+  "deployed": true
 }
