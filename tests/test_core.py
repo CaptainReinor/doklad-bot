@@ -14,6 +14,19 @@ from notifications import check_notifications, is_deadline_tomorrow
 from service import ActionError, Service, clean_group
 
 
+def test_catalog_schedule_matches_first_group_policy():
+    schedule = load_catalog()['schedule']
+    english_dates = {item['date'] for item in schedule
+                     if item['subject'] == 'Иностранный язык профессиональных коммуникаций'}
+
+    assert len(schedule) == 38
+    assert english_dates == {'09.09.2026', '23.09.2026', '07.10.2026',
+                             '21.10.2026', '11.11.2026'}
+    assert all(item['group'] == '' and item['room'] == 'СДО РАНХиГС' for item in schedule)
+    assert not any(item['subject'] == 'Научно-исследовательская работа (П)'
+                   or item['subject'].startswith('Практика по профилю') for item in schedule)
+
+
 def test_auth_signature_identity_and_extra_signature_field():
     raw = signed_data(42, signature='telegram-signature', query_id='a=b+c/тест')
     assert validate_init_data(raw, TEST_TOKEN)['id'] == 42
@@ -342,7 +355,7 @@ def test_lesson_reminder_is_one_daily_common_digest_with_full_details(service):
     assert service.db.get_notification_settings(2)['lessons'] is True
 
     lessons = [item for item in service.catalog()['schedule']
-               if item['date'] == '05.09.2026' and item['group'] == 'МН-4-25-01']
+               if item['date'] == '05.09.2026']
     assert len(lessons) == 2
     urls = ['https://meet.example/first', 'https://meet.example/second']
     for lesson, url in zip(lessons, urls, strict=True):

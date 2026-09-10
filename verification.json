@@ -1,11 +1,11 @@
 {
-  "python_tests_passed": 80,
+  "python_tests_passed": 81,
   "browser_scenarios_passed": 20,
   "javascript_errors": 0,
   "original_config_identical": false,
   "original_database_identical": true,
   "original_users_preserved_by_migration": 3,
-  "schedule_items_preserved": 44,
+  "schedule_items_preserved": 38,
   "topics_preserved": 10,
   "legacy_assignments_removed": 4,
   "live_telegram_tested": false,

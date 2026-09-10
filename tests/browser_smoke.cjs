@@ -45,17 +45,17 @@ async function main() {
         assert.match(await a.locator('#connectionStatusText').textContent(), /Обновлено в \d{2}:\d{2}/);
         checks.push('Manual refresh reports the time of the latest successful update');
         assert.equal((await a.locator('#schedule .section-subtitle').textContent()).trim(), 'Общее расписание занятий');
-        assert.equal(await a.locator('#totalClasses').textContent(), '44');
+        assert.equal(await a.locator('#totalClasses').textContent(), '38');
         // Fix the browser clock to the morning of a day with two later lessons.
         await a.clock.install({time: new Date('2026-09-05T10:00:00+03:00')});
         await a.evaluate(() => renderSchedule('upcoming'));
-        assert.equal(await a.locator('#scheduleContainer .schedule-card').filter({hasText:'01.09.2026'}).count(), 0);
+        assert.equal(await a.locator('#scheduleContainer .schedule-card').filter({hasText:'03.09.2026'}).count(), 0);
         assert.equal(await a.locator('#scheduleContainer .schedule-card').filter({hasText:'05.09.2026'}).count(), 2);
         assert.equal(await a.locator('#scheduleContainer .schedule-card.today').count(), 2);
         assert.match(await a.locator('#scheduleContainer .schedule-card.today').first().textContent(), /Сегодня/);
         assert.equal(await a.locator('#scheduleContainer .next-lesson-label').count(), 1);
         await a.locator('[data-filter="past"]').click();
-        assert.equal(await a.locator('#scheduleContainer .schedule-card').filter({hasText:'01.09.2026'}).count(), 1);
+        assert.equal(await a.locator('#scheduleContainer .schedule-card').filter({hasText:'03.09.2026'}).count(), 1);
         assert.equal(await a.locator('#scheduleContainer .schedule-card').filter({hasText:'05.09.2026'}).count(), 0);
         await a.locator('[data-filter="upcoming"]').click();
         checks.push('Upcoming is default; today is red and past dates have a separate newest-first view');
@@ -230,7 +230,7 @@ async function main() {
         await admin.getByRole('button', {name:'Вернуться в кабинет'}).click();
         await admin.getByRole('button', {name:'🗓 Управление расписанием'}).click();
         assert.equal(await admin.locator('#newLesson-subject').getAttribute('list'), 'scheduleSubjectSuggestions');
-        assert.ok(await admin.locator('#scheduleSubjectSuggestions option').count() >= 8);
+        assert.equal(await admin.locator('#scheduleSubjectSuggestions option').count(), 6);
         await admin.locator('#newLesson-date').fill('2026-12-31');
         await admin.locator('#newLesson-start').fill('18:30');
         await admin.locator('#newLesson-end').fill('19:50');
