@@ -787,9 +787,10 @@ class Database:
                     (event_key, user_id, kind, message, next_attempt) VALUES (?, ?, ?, ?, ?)''',
                     (event_key, user_id, kind, message, next_attempt))
 
-    def enqueue_notification(self, kind, message, event_key, recipients=None):
+    def enqueue_notification(self, kind, message, event_key, recipients=None, *, next_attempt=0):
         with self.connection() as conn:
-            self._enqueue(conn, kind, message, event_key=event_key, recipients=recipients)
+            self._enqueue(conn, kind, message, event_key=event_key, recipients=recipients,
+                          next_attempt=next_attempt)
 
     def observe_schedule(self, fingerprint):
         with self.connection() as conn:

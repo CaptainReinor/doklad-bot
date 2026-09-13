@@ -253,7 +253,10 @@ def test_notifications_persist_opt_out_and_no_repeat(service):
     sent = []
     def sender(user_id, text):
         sent.append((user_id, text))
-    check_notifications(service, sender, now=datetime(2026, 9, 14, 19))
+    check_notifications(service, sender, now=datetime(2026, 9, 14, 0, 1))
+    check_notifications(service, sender, now=datetime(2026, 9, 14, 8, 59))
+    assert sent == []
+    check_notifications(service, sender, now=datetime(2026, 9, 14, 9, 0))
     check_notifications(service, sender, now=datetime(2026, 9, 14, 23))
     assert len(sent) == 1 and sent[0][0] == 1
     again = Database(service.db.path)
@@ -269,9 +272,12 @@ def test_notification_timezone_and_report_recipient(service):
     register(service, 2)
     service.perform(1, {'action': 'book_topic', 'topicId': 1})
     sent = []
-    # 21:30 UTC is already September 14 in Moscow.
+    # 21:30 UTC is September 14 in Moscow, but still earlier than 09:00.
     check_notifications(service, lambda uid, msg: sent.append((uid, msg)),
                         now=datetime(2026, 9, 13, 21, 30, tzinfo=timezone.utc))
+    assert sent == []
+    check_notifications(service, lambda uid, msg: sent.append((uid, msg)),
+                        now=datetime(2026, 9, 14, 6, 0, tzinfo=timezone.utc))
     assert len(sent) == 3  # Assignment: 2 users; report: its owner only.
 
 
@@ -395,7 +401,9 @@ def test_schedule_change_notification_only_after_change(db):
     assert len(db.claim_notifications()) == 1
 
 
-def test_homework_is_admin_only_validated_persistent_and_removable(service):
+def test_homework_is_common_admin_only_and_uses_active_schedule_subjects(service):
+    register(service, 1, group='МН-4-25-01')
+    register(service, 2, group='МН-4-25-02')
     payload = {'action': 'create_assignment',
                'subject': 'Управление бизнес-процессами',
                'description': 'Подготовить схему бизнес-процесса.',
@@ -405,6 +413,7 @@ def test_homework_is_admin_only_validated_persistent_and_removable(service):
     assert error.value.status == 403
     service.perform(ADMIN, payload)
     assignment = service.catalog()['assignments'][0]
+    assert service.catalog(1, public=True)['assignments'] == service.catalog(2, public=True)['assignments']
     assert assignment['subject'] == 'Управление бизнес-процессами'
     assert assignment['description'] == 'Подготовить схему бизнес-процесса.'
     assert assignment['deadline'] == '21.09.2026'
@@ -418,6 +427,11 @@ def test_homework_is_admin_only_validated_persistent_and_removable(service):
         service.perform(ADMIN, {**payload, 'deadline': '31.02.2026'})
     service.perform(ADMIN, {'action': 'delete_assignment', 'assignmentId': assignment['id']})
     assert service.catalog()['assignments'] == []
+    for lesson in service.db.get_lessons():
+        if lesson['subject'] == payload['subject']:
+            service.db.set_lesson_active(lesson['id'], False)
+    with pytest.raises(ActionError, match='из расписания'):
+        service.perform(ADMIN, payload)
 
 
 def test_multiple_admins_can_manage_topics(db):

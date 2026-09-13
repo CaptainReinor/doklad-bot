@@ -147,7 +147,7 @@ class Service:
 
     def _topic_subject(self, value):
         subject = clean_text(value, 'название предмета', 2, 200)
-        available = {item['subject'] for item in self.db.get_lessons(include_inactive=True)}
+        available = {item['subject'] for item in self.db.get_lessons()}
         if subject not in available:
             raise ActionError('Выберите предмет из расписания.')
         return subject

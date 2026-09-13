@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from settings import APP_TIMEZONE, NOTIFICATION_INTERVAL
 
 logger = logging.getLogger(__name__)
+DEADLINE_REMINDER_HOUR = 9
 
 
 def is_deadline_tomorrow(deadline_str, current_date):
@@ -24,6 +25,10 @@ def is_deadline_tomorrow(deadline_str, current_date):
         return datetime.strptime(deadline_str, '%d.%m.%Y').date() == tomorrow
     except ValueError:
         return False
+
+
+def deadline_reminder_time(current_time):
+    return current_time.replace(hour=DEADLINE_REMINDER_HOUR, minute=0, second=0, microsecond=0)
 
 
 def lesson_start(lesson, timezone):
@@ -100,10 +105,11 @@ def check_notifications(service, send_message, *, now=None):
             link = f"\n🔗 Материалы: {item['url']}" if item.get('url') else ''
             service.db.enqueue_notification(
                 kind, f"🔔 Срок сдачи завтра\n{details}\n📅 {deadline}{link}",
-                f"deadline:{kind}:{item['id']}:{deadline}", recipients)
+                f"deadline:{kind}:{item['id']}:{deadline}", recipients,
+                next_attempt=deadline_reminder_time(now).timestamp())
     direct_jobs = []
     topic_batches = {}
-    for job in service.db.claim_notifications(limit=500):
+    for job in service.db.claim_notifications(limit=500, now=now.timestamp()):
         if job['event_key'].startswith('deadline:'):
             _, kind, item_id, deadline = job['event_key'].split(':', 3)
             item = next((i for i in service.catalog().get(kind, []) if i['id'] == int(item_id)), None)
