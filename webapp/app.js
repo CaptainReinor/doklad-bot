@@ -327,7 +327,6 @@ function renderToday() {
     const queueSection = presentationQueues.length ? `<section class="hub-section"><h3>🎤 Очередь выступлений</h3>
         <div class="hub-list">${presentationQueues.map((queue, queueIndex) => renderPresentationQueue(queue, queueIndex)).join("")}</div></section>` : "";
     const nearestSection = `<section class="hub-section"><h3>⏳ Ближайшее</h3>
-        <p class="hub-note">Не больше трёх событий на ближайшие семь дней.</p>
         <div class="hub-list">${nearest.length ? nearest.map(item => `<article class="hub-card nearby-item">
             <div class="hub-card-top"><strong>${item.icon} ${escapeHtml(item.kind)}</strong><span>${escapeHtml(item.dateLabel)}</span></div>
             <h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.details)}</p>${resourceButton(item.url)}
