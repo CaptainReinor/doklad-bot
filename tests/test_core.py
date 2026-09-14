@@ -1,3 +1,4 @@
+import io
 import json
 import sqlite3
 import time
@@ -218,7 +219,7 @@ def test_v7_migration_preserves_cross_group_bookings_and_locks_topic(tmp_path):
     topic = next(item for item in db.get_topics(include_inactive=True) if item['id'] == 1)
     assert topic['is_common'] is True and topic['is_multi'] is False
     assert len(db.get_all_bookings()) == 2
-    assert sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0] == 12
+    assert sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0] == 13
 
 
 def test_db_location_does_not_follow_cwd(db, monkeypatch, tmp_path):
@@ -332,10 +333,11 @@ def test_topic_additions_and_edits_are_group_scoped_and_batched(service):
     assert 'Изменены темы докладов: 2' in sent[0][1]
 
 
-def test_four_notification_toggles_and_homework_edits_are_silent(service):
+def test_five_notification_toggles_and_homework_edits_are_silent(service):
     register(service)
     assert service.db.get_notification_settings(1) == {
-        'assignments': True, 'topics': True, 'schedule': True, 'lessons': False}
+        'assignments': True, 'topics': True, 'schedule': True,
+        'announcements': True, 'lessons': False}
     with pytest.raises(ValueError):
         service.db.set_notification(1, 'queue', True)
     subject = service.catalog()['schedule'][0]['subject']
@@ -645,9 +647,112 @@ def test_aggregate_admin_stats_counts_sessions_and_notification_preferences(clie
     assert preferences['assignments'] == {'kind': 'assignments', 'enabled': 1, 'percent': 50}
     assert preferences['topics']['enabled'] == 2
     assert preferences['schedule']['enabled'] == 2
+    assert preferences['announcements']['enabled'] == 2
     assert preferences['lessons'] == {'kind': 'lessons', 'enabled': 1, 'percent': 50}
     assert 'adminStats' in service.state(ADMIN)
     assert 'adminStats' not in service.state(1)
+
+
+def test_announcements_are_admin_only_and_default_notification_is_sent(service):
+    register(service, 1)
+    register(service, 2, 'МН-4-25-02')
+    with pytest.raises(ActionError) as denied:
+        service.perform(1, {'action': 'create_announcement', 'title': 'Важное сообщение',
+                            'body': 'Текст для всех студентов.'})
+    assert getattr(denied.value, 'status', None) == 403
+
+    service.perform(ADMIN, {'action': 'create_announcement', 'title': 'Важное сообщение',
+                            'body': 'Текст для всех студентов.', 'url': 'https://example.edu/news'})
+    state = service.state(1)
+    assert state['announcements'][0]['title'] == 'Важное сообщение'
+    assert state['notifications']['announcements'] is True
+    jobs = service.db.claim_notifications()
+    assert {job['user_id'] for job in jobs} == {1, 2}
+    assert all(job['kind'] == 'announcements' for job in jobs)
+
+    announcement_id = state['announcements'][0]['id']
+    service.perform(ADMIN, {'action': 'update_announcement', 'announcementId': announcement_id,
+                            'title': 'Обновлённое сообщение', 'body': 'Новый текст.'})
+    assert service.state(1)['announcements'][0]['title'] == 'Обновлённое сообщение'
+    service.perform(ADMIN, {'action': 'delete_announcement', 'announcementId': announcement_id})
+    assert service.state(1)['announcements'] == []
+    assert service.db.claim_notifications(now=time.time() + 1000) == []
+
+
+def test_presentation_queue_is_automatic_and_has_one_slot_per_booked_report(service, monkeypatch):
+    today = '14.09.2026'
+    subject = 'Управление бизнес-процессами'
+    monkeypatch.setattr(Service, '_today_string', staticmethod(lambda: today))
+    register(service, 1)
+    register(service, 2)
+    register(service, 3)
+    service.perform(ADMIN, {'action': 'create_lesson', 'date': today, 'time': '10:00–11:30',
+                            'type': 'Л', 'subject': subject, 'teacher': 'И. И. Иванов',
+                            'room': 'Онлайн', 'url': 'https://example.edu/lesson'})
+    service.perform(ADMIN, {'action': 'create_topic', 'title': 'Первый доклад',
+                            'subject': subject, 'deadline': today, 'isCommon': False,
+                            'isMulti': False, 'group': 'МН-4-25-01'})
+    service.perform(ADMIN, {'action': 'create_topic', 'title': 'Доклад с соавторами',
+                            'subject': subject, 'deadline': today, 'isCommon': False,
+                            'isMulti': True, 'group': 'МН-4-25-01'})
+    topics = {item['title']: item for item in service.topics()}
+    service.perform(1, {'action': 'book_topic', 'topicId': topics['Первый доклад']['id']})
+    service.perform(2, {'action': 'book_topic', 'topicId': topics['Доклад с соавторами']['id']})
+    service.perform(3, {'action': 'book_topic', 'topicId': topics['Доклад с соавторами']['id']})
+
+    queue = service.state(2)['presentationQueues'][0]
+    assert queue['date'] == today
+    assert queue['slotCount'] == 2
+    assert len(queue['reports']) == 2
+    assert len(next(item for item in queue['reports'] if item['title'] == 'Доклад с соавторами')['owners']) == 2
+
+    service.perform(2, {'action': 'choose_presentation_position', 'date': today,
+                        'subject': subject, 'topicId': topics['Доклад с соавторами']['id'],
+                        'position': 1})
+    assert service.state(3)['presentationQueues'][0]['reports'][0]['position'] == 1
+    with pytest.raises(ActionError, match='место уже занято'):
+        service.perform(1, {'action': 'choose_presentation_position', 'date': today,
+                            'subject': subject, 'topicId': topics['Первый доклад']['id'],
+                            'position': 1})
+    service.perform(3, {'action': 'leave_presentation_queue', 'date': today,
+                        'subject': subject, 'topicId': topics['Доклад с соавторами']['id']})
+    assert all(item['position'] is None for item in service.state(2)['presentationQueues'][0]['reports'])
+    service.perform(ADMIN, {'action': 'set_topic_active',
+                            'topicId': topics['Доклад с соавторами']['id'], 'active': False})
+    assert service.state(2)['presentationQueues'][0]['slotCount'] == 1
+    service.perform(ADMIN, {'action': 'set_topic_active',
+                            'topicId': topics['Первый доклад']['id'], 'active': False})
+    assert service.state(2)['presentationQueues'] == []
+
+
+def test_presentation_queue_requires_matching_lesson_and_deadline(service, monkeypatch):
+    monkeypatch.setattr(Service, '_today_string', staticmethod(lambda: '14.09.2026'))
+    register(service, 1)
+    today_subjects = {item['subject'] for item in service.catalog()['schedule']
+                      if item['date'] == '14.09.2026'}
+    subject = next(item['subject'] for item in service.catalog()['schedule']
+                   if item['subject'] not in today_subjects)
+    service.perform(ADMIN, {'action': 'create_topic', 'title': 'Доклад без сегодняшней пары',
+                            'subject': subject, 'deadline': '14.09.2026',
+                            'isCommon': False, 'isMulti': False, 'group': 'МН-4-25-01'})
+    topic = next(item for item in service.topics() if item['title'] == 'Доклад без сегодняшней пары')
+    service.perform(1, {'action': 'book_topic', 'topicId': topic['id']})
+    assert service.state(1)['presentationQueues'] == []
+
+
+def test_admin_uploads_material_and_students_can_download_it(client, headers):
+    denied = client.post('/api/upload', data={'file': (io.BytesIO(b'hello'), 'homework.pdf')},
+                         headers=headers(1), content_type='multipart/form-data')
+    assert denied.status_code == 403
+    response = client.post('/api/upload', data={'file': (io.BytesIO(b'hello'), 'Домашка.pdf')},
+                           headers=headers(ADMIN), content_type='multipart/form-data')
+    assert response.status_code == 200
+    assert response.json['path'].startswith('/files/') and response.json['path'].endswith('.pdf')
+    download = client.get(response.json['path'])
+    assert download.status_code == 200 and download.data == b'hello'
+    invalid = client.post('/api/upload', data={'file': (io.BytesIO(b'bad'), 'script.exe')},
+                          headers=headers(ADMIN), content_type='multipart/form-data')
+    assert invalid.status_code == 400
 
 
 def test_resource_links_archives_and_report_deadline_reminder(service):

@@ -8,6 +8,7 @@ NOTIFICATION_DEFAULTS = {
     'assignments': True,
     'topics': True,
     'schedule': True,
+    'announcements': True,
     # Lesson reminders are opt-in so an update cannot unexpectedly message everyone.
     'lessons': False,
 }

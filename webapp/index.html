@@ -22,6 +22,7 @@
             --button: var(--tg-theme-button-color, #2481cc);
             --button-text: var(--tg-theme-button-text-color, #ffffff);
             --link: var(--tg-theme-link-color, #2481cc);
+            --primary: var(--button);
 
             --green: #22a06b;
             --red: #e55353;
@@ -1115,6 +1116,29 @@
         .admin-notification-stat b { color: var(--primary); font-size: 18px; }
         .empty-state.compact { margin-top: 12px; padding: 12px; }
         .topic-title, .profile-name, .value { overflow-wrap: anywhere; }
+        .hub-section { margin: 0 0 24px; }
+        .hub-section h3 { margin: 0 0 10px; font-size: 17px; }
+        .hub-note { margin: -5px 0 10px; color: var(--hint); font-size: 12px; }
+        .hub-list { display: grid; gap: 10px; }
+        .hub-card { padding: 15px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card-bg); box-shadow: var(--shadow); }
+        .hub-card strong, .hub-card h4, .hub-card p { overflow-wrap: anywhere; }
+        .hub-card h4 { margin: 8px 0 4px; font-size: 15px; }
+        .hub-card p { margin: 6px 0 0; color: var(--hint); font-size: 13px; white-space: pre-wrap; }
+        .hub-card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+        .hub-card-top span { flex: 0 0 auto; color: var(--primary); font-size: 12px; font-weight: 700; }
+        .announcement-card { border-left: 4px solid var(--purple); }
+        .today-lesson { border-left: 4px solid var(--red); }
+        .queue-card { border-left: 4px solid var(--orange); }
+        .queue-topic-select { margin: 7px 0 11px; }
+        .queue-slots { display: grid; gap: 8px; margin-top: 12px; }
+        .queue-slot { min-height: 58px; display: grid; grid-template-columns: 32px 1fr; align-items: center; gap: 4px 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: rgba(127, 127, 127, .04); color: var(--text); text-align: left; }
+        .queue-slot b { grid-row: 1 / span 2; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: rgba(36, 129, 204, .12); color: var(--primary); }
+        .queue-slot span { color: var(--hint); font-size: 12px; overflow-wrap: anywhere; }
+        .queue-slot.empty { border-style: dashed; }
+        .queue-slot.empty:hover { border-color: var(--primary); background: rgba(36, 129, 204, .07); }
+        .queue-slot.occupied.mine { border-color: rgba(34, 160, 107, .45); background: rgba(34, 160, 107, .07); }
+        .queue-slot .btn { grid-column: 2; width: max-content; margin-top: 4px; }
+        .file-control { padding: 8px; }
         button:disabled { opacity: .55; cursor: not-allowed; }
         @media (max-width: 560px) {
             .admin-create-grid, .lesson-fields { grid-template-columns: 1fr; }
@@ -1151,6 +1175,14 @@
         <nav class="tabs">
             <button
                 class="tab active"
+                data-tab="today"
+                onclick="switchTab('today')"
+            >
+                ✨ Сегодня
+            </button>
+
+            <button
+                class="tab"
                 data-tab="schedule"
                 onclick="switchTab('schedule')"
             >
@@ -1202,11 +1234,19 @@
     </div>
 
 
+    <!-- ==================== СЕГОДНЯ ==================== -->
+
+    <section id="today" class="tab-content active">
+        <h2 class="section-title">✨ Сегодня</h2>
+        <p class="section-subtitle">Пары, выступления и ближайшие дела</p>
+        <div id="todayContent"></div>
+    </section>
+
     <!-- ==================== РАСПИСАНИЕ ==================== -->
 
     <section
         id="schedule"
-        class="tab-content active"
+        class="tab-content"
     >
         <h2 class="section-title">
             📅 Расписание
@@ -1467,7 +1507,7 @@
 
 
 <script src="config.js?v=20260905-2"></script>
-<script src="app.js?v=20260914-2" defer></script>
+<script src="app.js?v=20260914-3" defer></script>
 
 </body>
 </html>

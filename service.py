@@ -130,7 +130,8 @@ class Service:
         value = value.strip()
         if value:
             parsed = urlsplit(value)
-            if (len(value) > 1000 or parsed.scheme != 'https' or not parsed.hostname or
+            local_http = parsed.scheme == 'http' and parsed.hostname in ('127.0.0.1', 'localhost')
+            if (len(value) > 1000 or (parsed.scheme != 'https' and not local_http) or not parsed.hostname or
                     any(char.isspace() for char in value)):
                 raise ActionError(f'Укажите полную HTTPS-ссылку на {target}.')
         return value
@@ -179,6 +180,12 @@ class Service:
         return [{**row, 'archived': self._deadline_is_past(row.get('deadline'))}
                 for row in self.db.get_assignments()]
 
+    def announcements(self):
+        return [{
+            'id': row['id'], 'title': row['title'], 'body': row['body'],
+            'url': row['url'], 'createdAt': row['created_at'], 'updatedAt': row['updated_at']
+        } for row in self.db.get_announcements()]
+
     def visible_topics(self, user_id=None, *, include_inactive=False):
         topics = self.topics(include_inactive=include_inactive)
         if user_id is not None and self.is_admin(user_id):
@@ -194,6 +201,54 @@ class Service:
             if type(topic_id) is int and topic['id'] == topic_id:
                 return topic
         return None
+
+    @staticmethod
+    def _today_string():
+        return datetime.now(ZoneInfo(APP_TIMEZONE)).strftime('%d.%m.%Y')
+
+    def presentation_queues(self, user_id, queue_date=None):
+        queue_date = queue_date or self._today_string()
+        lessons = [item for item in self.db.get_lessons()
+                   if item['date'] == queue_date]
+        subjects = sorted({item['subject'] for item in lessons})
+        topics = [item for item in self.topics(include_inactive=True)
+                  if not item['archived'] and item.get('deadline') == queue_date
+                  and item['subject'] in subjects]
+        booking_rows = self.db.get_all_bookings()
+        result = []
+        for subject in subjects:
+            subject_lessons = [item for item in lessons if item['subject'] == subject]
+            reports = []
+            for topic in topics:
+                if topic['subject'] != subject:
+                    continue
+                owners = [row for row in booking_rows if row['topic'] == topic['title']]
+                if not owners:
+                    continue
+                reports.append({
+                    'topicId': topic['id'], 'title': topic['title'],
+                    'url': topic.get('url', ''),
+                    'owners': [{'name': row['booked_by'], 'group': row['group_name']}
+                               for row in owners],
+                    'isMine': any(row['user_id'] == user_id for row in owners)
+                })
+            if not reports:
+                continue
+            positions = {row['topic_id']: row['position']
+                         for row in self.db.get_presentation_positions(queue_date, subject)}
+            for report in reports:
+                report['position'] = positions.get(report['topicId'])
+            result.append({
+                'date': queue_date,
+                'subject': subject,
+                'times': [item['time'] for item in subject_lessons],
+                'teacher': subject_lessons[0]['teacher'],
+                'room': subject_lessons[0]['room'],
+                'slotCount': len(reports),
+                'reports': sorted(reports, key=lambda item: (
+                    item['position'] is None, item['position'] or 0, item['topicId']))
+            })
+        return result
 
     def catalog(self, user_id=None, *, public=False):
         result = load_catalog()
@@ -224,8 +279,10 @@ class Service:
                       'url': topics.get(r['topic'], {}).get('url', ''),
                       'date': r['created_at']} for r in visible_rows]
         result = {'user': self.public_profile(user), 'bookings': bookings,
-                  'notifications': settings, 'participants': len({r['user_id'] for r in visible_rows}),
-                  'isAdmin': self.is_admin(user_id)}
+                   'notifications': settings, 'participants': len({r['user_id'] for r in visible_rows}),
+                   'isAdmin': self.is_admin(user_id),
+                   'announcements': self.announcements(),
+                   'presentationQueues': self.presentation_queues(user_id)}
         if result['isAdmin']:
             result['adminTopics'] = [{**topic, 'bookings': [
                 {'bookingId': row['id'], 'user': row['booked_by'], 'group': row['group_name']}
@@ -233,6 +290,7 @@ class Service:
             ]} for topic in all_topics]
             result['adminLessons'] = self.db.get_lessons(include_inactive=True)
             result['adminAssignments'] = self.assignments()
+            result['adminAnnouncements'] = self.announcements()
             result['adminStats'] = self.db.get_admin_stats()
             result['topicDrafts'] = [{
                 'id': row['id'], 'title': row['title'], 'subject': row['subject'],
@@ -255,6 +313,54 @@ class Service:
         action = data.get('action')
         current = self.db.get_user(user_id)
         try:
+            if action in ('create_announcement', 'update_announcement', 'delete_announcement'):
+                if not self.is_admin(user_id):
+                    raise ActionError('Публиковать объявления может только администратор.', 403)
+                if action == 'create_announcement':
+                    title = clean_text(data.get('title'), 'заголовок объявления', 3, 120)
+                    body = clean_text(data.get('body'), 'текст объявления', 3, 2000)
+                    url = self._optional_url(data.get('url', ''))
+                    item = self.db.create_announcement(title, body, url, actor_id=user_id)
+                    self.db.log_audit(user_id, 'create', 'announcement', item['id'],
+                                      f'Опубликовано объявление: {title}')
+                    return 'Объявление опубликовано.'
+                announcement_id = data.get('announcementId')
+                existing = self.db.get_announcement(announcement_id) if type(announcement_id) is int else None
+                if not existing:
+                    raise ActionError('Объявление не найдено.')
+                if action == 'update_announcement':
+                    title = clean_text(data.get('title'), 'заголовок объявления', 3, 120)
+                    body = clean_text(data.get('body'), 'текст объявления', 3, 2000)
+                    url = self._optional_url(data.get('url', ''))
+                    self.db.update_announcement(announcement_id, title, body, url)
+                    self.db.log_audit(user_id, 'update', 'announcement', announcement_id,
+                                      f'Изменено объявление: {title}')
+                    return 'Объявление сохранено.'
+                self.db.delete_announcement(announcement_id)
+                self.db.log_audit(user_id, 'delete', 'announcement', announcement_id,
+                                  f"Удалено объявление: {existing['title']}")
+                return 'Объявление удалено.'
+            if action in ('choose_presentation_position', 'leave_presentation_queue'):
+                if not current:
+                    raise ActionError('Сначала заполните профиль.', 403)
+                queue_date = data.get('date')
+                subject = clean_text(data.get('subject'), 'название предмета', 2, 200)
+                topic_id = data.get('topicId')
+                if queue_date != self._today_string() or type(topic_id) is not int:
+                    raise ActionError('Эта очередь сейчас недоступна.', 409)
+                queue = next((item for item in self.presentation_queues(user_id, queue_date)
+                              if item['subject'] == subject), None)
+                report = next((item for item in (queue or {}).get('reports', [])
+                               if item['topicId'] == topic_id and item['isMine']), None)
+                if not queue or not report:
+                    raise ActionError('Вы не можете занять место в этой очереди.', 403)
+                if action == 'leave_presentation_queue':
+                    changed = self.db.leave_presentation_queue(
+                        queue_date, subject, topic_id, user_id)
+                    return 'Место освобождено.' if changed else 'Доклад ещё не стоит в очереди.'
+                changed = self.db.set_presentation_position(
+                    queue_date, subject, topic_id, user_id, data.get('position'), queue['slotCount'])
+                return 'Место в очереди выбрано.' if changed else 'Этот доклад уже стоит на выбранном месте.'
             if action == 'admin_cancel_booking':
                 if not self.is_admin(user_id):
                     raise ActionError('Снимать чужие брони может только администратор.', 403)
@@ -395,6 +501,7 @@ class Service:
                     if deadline and existing_topic.get('deadline') != deadline:
                         self.db.set_deadline('topics', item_id, deadline)
                     if changed:
+                        self.db.clear_topic_presentation_positions(item_id)
                         self.db.enqueue_topic_change(item_id, user_id)
                     self.db.log_audit(user_id, 'update', 'topic', item_id,
                                       f'Изменена тема: {topic["title"]}')
@@ -408,6 +515,7 @@ class Service:
                                       f"{'Восстановлена' if active else 'Архивирована'} тема: {existing_topic['title']}")
                     return 'Тема возвращена из архива.' if active else 'Тема перенесена в архив.'
                 self.db.delete_topic(item_id)
+                self.db.clear_topic_presentation_positions(item_id)
                 self.db.log_audit(user_id, 'delete', 'topic', item_id,
                                   f"Удалена тема: {existing_topic['title']}")
                 return 'Тема удалена.'
@@ -424,6 +532,7 @@ class Service:
                 deadline = self._valid_deadline(data.get('deadline'))
                 if item.get('deadline') != deadline:
                     self.db.set_deadline(kind, item_id, deadline)
+                    self.db.clear_topic_presentation_positions(item_id)
                     self.db.enqueue_topic_change(item_id, user_id)
                     self.db.log_audit(user_id, 'deadline', 'topic', item_id,
                                       f"Изменён срок темы «{item['title']}»: {deadline}")

@@ -2,13 +2,15 @@
 
 const tg = window.Telegram?.WebApp || null;
 const apiBase = (window.APP_CONFIG?.apiBaseUrl || window.location.origin).replace(/\/$/, "");
-let scheduleData = [], topicsData = [], assignmentsData = [];
+let scheduleData = [], topicsData = [], assignmentsData = [], announcementsData = [];
+let presentationQueues = [];
 let bookings = [], myBookings = [], notificationSettings = {};
-let adminTopics = [], adminLessons = [], adminAssignments = [];
+let adminTopics = [], adminLessons = [], adminAssignments = [], adminAnnouncements = [];
 let adminTopicDrafts = [], adminAuditLog = [], adminStats = null;
 let userData = null, isRegistered = false, isAdmin = false;
 let connected = false, busy = false, editingProfile = false;
 let editingTopics = false, editingSchedule = false, editingHomework = false, editingAudit = false, editingStats = false;
+let editingAnnouncements = false;
 let mutationVersion = 0, refreshing = false;
 let currentScheduleFilter = "upcoming", studyTimezone = "Europe/Moscow";
 let currentTopicSubject = "all", currentTopicView = "active", currentHomeworkView = "active";
@@ -29,8 +31,9 @@ function shortSubject(value) {
 
 function safeHttpsUrl(value) {
     try {
-        const parsed = new URL(value);
-        return parsed.protocol === "https:" ? parsed.href : "";
+        const parsed = new URL(value, window.location.origin);
+        return parsed.protocol === "https:" || (parsed.protocol === "http:" && parsed.origin === window.location.origin)
+            ? parsed.href : "";
     } catch { return ""; }
 }
 
@@ -172,11 +175,14 @@ function applyState(data) {
     adminTopics = isAdmin && Array.isArray(data.adminTopics) ? data.adminTopics : [];
     adminLessons = isAdmin && Array.isArray(data.adminLessons) ? data.adminLessons : [];
     adminAssignments = isAdmin && Array.isArray(data.adminAssignments) ? data.adminAssignments : [];
+    adminAnnouncements = isAdmin && Array.isArray(data.adminAnnouncements) ? data.adminAnnouncements : [];
     adminTopicDrafts = isAdmin && Array.isArray(data.topicDrafts) ? data.topicDrafts : [];
     adminAuditLog = isAdmin && Array.isArray(data.auditLog) ? data.auditLog : [];
     adminStats = isAdmin && data.adminStats && typeof data.adminStats === "object" ? data.adminStats : null;
     bookings = data.bookings;
     myBookings = bookings.filter(item => item.isMine);
+    announcementsData = Array.isArray(data.announcements) ? data.announcements : [];
+    presentationQueues = Array.isArray(data.presentationQueues) ? data.presentationQueues : [];
     notificationSettings = data.notifications || {};
     connected = true;
     const adminTab = document.querySelector('.tab[data-tab="admin"]');
@@ -185,7 +191,30 @@ function applyState(data) {
     syncRegistrationGate();
 }
 
+async function uploadAdminFile(inputId) {
+    const input = document.getElementById(inputId);
+    const file = input?.files?.[0];
+    if (!file) return "";
+    if (file.size > 10 * 1024 * 1024) throw new Error("Файл должен быть не больше 10 МБ.");
+    const form = new FormData();
+    form.append("file", file);
+    const headers = {};
+    if (tg?.initData) headers.Authorization = "tma " + tg.initData;
+    showStatus("Загружаем файл…", 15000);
+    const response = await fetch(apiBase + "/api/upload", {method: "POST", headers, body: form});
+    let data;
+    try { data = await response.json(); }
+    catch { throw new Error("Сервер не смог загрузить файл."); }
+    if (!response.ok) throw new Error(data.error || "Не удалось загрузить файл.");
+    return new URL(data.path, window.location.origin).href;
+}
+
+async function materialUrl(urlInputId, fileInputId) {
+    return await uploadAdminFile(fileInputId) || document.getElementById(urlInputId).value.trim();
+}
+
 function renderAll() {
+    renderToday();
     renderSchedule();
     renderTopics();
     renderHomework();
@@ -193,7 +222,7 @@ function renderAll() {
     if (!editingProfile) renderCabinet();
     if (isAdmin) {
         if (editingStats) renderAdminStats();
-        else if (!editingTopics && !editingSchedule && !editingHomework && !editingAudit) renderAdmin();
+        else if (!editingTopics && !editingSchedule && !editingHomework && !editingAudit && !editingAnnouncements) renderAdmin();
     }
     document.querySelectorAll('#cabinetContent button[type="submit"], #adminContent button[type="submit"]').forEach(button => {
         button.disabled = !connected || busy;
@@ -246,6 +275,101 @@ async function performAction(data) {
         busy = false;
         renderAll();
     }
+}
+
+function nearestEvents() {
+    const today = studyToday();
+    const start = calendarTime(today);
+    const end = start + 7 * 86400000 + 86399999;
+    const events = [];
+    scheduleData.forEach(lesson => {
+        const when = lessonStart(lesson);
+        if (calendarTime(lesson.date) > start && when <= end) events.push({
+            kind: "Пара", icon: "📅", title: lesson.subject,
+            dateLabel: lesson.date, details: `${lesson.time}${lesson.teacher ? ` · ${lesson.teacher}` : ""}`,
+            when, url: lesson.url || ""
+        });
+    });
+    assignmentsData.filter(item => !item.archived).forEach(item => {
+        const when = calendarTime(item.deadline, "23.59");
+        if (when >= start && when <= end) events.push({
+            kind: "Домашка", icon: "📝", title: item.subject,
+            dateLabel: item.deadline, details: item.description, when, url: item.url || ""
+        });
+    });
+    const myTopicIds = new Set(myBookings.map(item => item.id));
+    topicsData.filter(item => myTopicIds.has(item.id) && !item.archived && item.deadline).forEach(item => {
+        const when = calendarTime(item.deadline, "23.59");
+        if (when >= start && when <= end) events.push({
+            kind: "Доклад", icon: "📚", title: item.title,
+            dateLabel: item.deadline, details: shortSubject(item.subject), when, url: item.url || ""
+        });
+    });
+    return events.sort((a, b) => a.when - b.when || a.kind.localeCompare(b.kind, "ru")).slice(0, 3);
+}
+
+function renderToday() {
+    const container = document.getElementById("todayContent");
+    if (!container) return;
+    const today = studyToday();
+    const lessons = scheduleData.filter(item => item.date === today).sort((a, b) => lessonStart(a) - lessonStart(b));
+    const announcements = announcementsData.slice(0, 3);
+    const nearest = nearestEvents();
+    const announcementSection = announcements.length ? `<section class="hub-section">
+        <h3>📣 Объявления</h3><div class="hub-list">${announcements.map(item => `<article class="hub-card announcement-card">
+            <strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.body)}</p>
+            ${resourceButton(item.url, "Открыть")}</article>`).join("")}</div></section>` : "";
+    const lessonSection = lessons.length ? `<section class="hub-section"><h3>📅 Сегодня</h3>
+        <div class="hub-list">${lessons.map(item => `<article class="hub-card today-lesson">
+            <div class="hub-card-top"><strong>${escapeHtml(item.subject)}</strong><span>${escapeHtml(item.time)}</span></div>
+            <p>${escapeHtml([item.teacher, item.room].filter(Boolean).join(" · ") || "Детали не указаны")}</p>
+            ${resourceButton(item.url, "Подключиться к паре")}</article>`).join("")}</div></section>` : "";
+    const queueSection = presentationQueues.length ? `<section class="hub-section"><h3>🎤 Очередь выступлений</h3>
+        <div class="hub-list">${presentationQueues.map((queue, queueIndex) => renderPresentationQueue(queue, queueIndex)).join("")}</div></section>` : "";
+    const nearestSection = `<section class="hub-section"><h3>⏳ Ближайшее</h3>
+        <p class="hub-note">Не больше трёх событий на ближайшие семь дней.</p>
+        <div class="hub-list">${nearest.length ? nearest.map(item => `<article class="hub-card nearby-item">
+            <div class="hub-card-top"><strong>${item.icon} ${escapeHtml(item.kind)}</strong><span>${escapeHtml(item.dateLabel)}</span></div>
+            <h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.details)}</p>${resourceButton(item.url)}
+        </article>`).join("") : '<div class="empty-state compact">На ближайшие семь дней событий нет.</div>'}</div></section>`;
+    container.innerHTML = `${announcementSection}${lessonSection}${queueSection}${nearestSection}`;
+}
+
+function renderPresentationQueue(queue, queueIndex) {
+    const positioned = new Map(queue.reports.filter(item => item.position).map(item => [item.position, item]));
+    const mine = queue.reports.filter(item => item.isMine);
+    const options = mine.map(item => `<option value="${item.topicId}">${escapeHtml(item.title)}${item.position ? ` · место ${item.position}` : ""}</option>`).join("");
+    const slots = Array.from({length: queue.slotCount}, (_, offset) => {
+        const position = offset + 1;
+        const report = positioned.get(position);
+        if (!report) return `<button class="queue-slot empty" ${!mine.length || busy || !connected ? "disabled" : ""}
+            onclick="chooseQueueSlot(${queueIndex}, ${position})"><b>${position}</b><span>Свободно</span></button>`;
+        return `<div class="queue-slot occupied ${report.isMine ? "mine" : ""}"><b>${position}</b>
+            <strong>${escapeHtml(report.title)}</strong>
+            <span>${escapeHtml(report.owners.map(owner => owner.name).join(", "))}</span>
+            ${report.isMine ? `<button class="btn btn-secondary btn-small" onclick="leavePresentationQueue(${queueIndex}, ${report.topicId})">Освободить</button>` : ""}</div>`;
+    }).join("");
+    return `<article class="hub-card queue-card"><div class="hub-card-top"><strong>${escapeHtml(shortSubject(queue.subject))}</strong>
+        <span>${escapeHtml(queue.times.join(", "))}</span></div>
+        <p>${escapeHtml([queue.teacher, queue.room].filter(Boolean).join(" · "))}</p>
+        ${mine.length ? `<label class="form-label" for="queue-topic-${queueIndex}">Мой доклад</label>
+        <select class="form-control queue-topic-select" id="queue-topic-${queueIndex}">${options}</select>` : ""}
+        <div class="queue-slots">${slots}</div></article>`;
+}
+
+async function chooseQueueSlot(queueIndex, position) {
+    const queue = presentationQueues[queueIndex];
+    const topicId = Number(document.getElementById(`queue-topic-${queueIndex}`)?.value);
+    if (!queue || !topicId) return;
+    await performAction({action: "choose_presentation_position", date: queue.date,
+        subject: queue.subject, topicId, position});
+}
+
+async function leavePresentationQueue(queueIndex, topicId) {
+    const queue = presentationQueues[queueIndex];
+    if (!queue) return;
+    await performAction({action: "leave_presentation_queue", date: queue.date,
+        subject: queue.subject, topicId});
 }
 
 function renderTopics() {
@@ -420,12 +544,14 @@ function renderAdmin() {
     editingHomework = false;
     editingAudit = false;
     editingStats = false;
+    editingAnnouncements = false;
     document.getElementById("adminContent").innerHTML = `<div class="profile-card card">
         <h3 class="section-title">Управление</h3>
         <div class="admin-actions">
         <button class="btn btn-primary" onclick="renderTopicEditor()">📚 Управление темами</button>
         <button class="btn btn-primary" onclick="renderHomeworkEditor()">📝 Управление домашкой</button>
         <button class="btn btn-primary" onclick="renderScheduleEditor()">🗓 Управление расписанием</button>
+        <button class="btn btn-primary" onclick="renderAnnouncementEditor()">📣 Объявления</button>
         <button class="btn btn-primary" onclick="renderAdminStats()">📊 Статистика</button>
         <button class="btn btn-outline" onclick="renderAuditLog()">🕘 История действий</button>
         </div></div>`;
@@ -443,6 +569,7 @@ function renderTopicEditor() {
     editingHomework = false;
     editingAudit = false;
     editingStats = false;
+    editingAnnouncements = false;
     editingTopics = true;
     const subjectOptions = [...new Set(scheduleData.map(item => item.subject).filter(Boolean))]
         .sort((a, b) => shortSubject(a).localeCompare(shortSubject(b), "ru"));
@@ -462,6 +589,8 @@ function renderTopicEditor() {
             <input class="form-control" type="date" id="newTopicDeadline"></div>
             <div class="wide"><label class="form-label" for="newTopicUrl">Ссылка, необязательно</label>
             <input class="form-control" type="url" id="newTopicUrl" maxlength="1000" placeholder="https://..."></div>
+            <div class="wide"><label class="form-label" for="newTopicFile">Или прикрепить файл, до 10 МБ</label>
+            <input class="form-control file-control" type="file" id="newTopicFile" accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.ods,.txt,.png,.jpg,.jpeg,.zip"></div>
             <div><label class="form-label" for="newTopicGroup">Группа</label>
             <select class="form-control" id="newTopicGroup">${groupOptions("МН-4-25-01")}</select></div>
             <label><input type="checkbox" id="newTopicCommon" onchange="syncTopicScope('newTopic')"> Общий доклад</label>
@@ -480,6 +609,8 @@ function renderTopicEditor() {
                 <input class="form-control" type="date" id="draftTopicDeadline"></div>
                 <div class="wide"><label class="form-label" for="draftTopicUrl">Ссылка для всех тем, необязательно</label>
                 <input class="form-control" type="url" id="draftTopicUrl" maxlength="1000" placeholder="https://..."></div>
+                <div class="wide"><label class="form-label" for="draftTopicFile">Или общий файл, до 10 МБ</label>
+                <input class="form-control file-control" type="file" id="draftTopicFile" accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.ods,.txt,.png,.jpg,.jpeg,.zip"></div>
                 <div><label class="form-label" for="draftTopicGroup">Группа</label>
                 <select class="form-control" id="draftTopicGroup">${groupOptions("МН-4-25-01")}</select></div>
                 <label><input type="checkbox" id="draftTopicCommon" onchange="syncTopicScope('draftTopic')"> Общий доклад</label>
@@ -507,6 +638,8 @@ function renderTopicEditor() {
             <input class="form-control" type="date" id="topic-deadline-${topic.id}" value="${dateInputValue(topic.deadline)}">
             <label class="form-label" for="topic-url-${topic.id}">Ссылка</label>
             <input class="form-control" type="url" id="topic-url-${topic.id}" maxlength="1000" placeholder="https://..." value="${escapeHtml(topic.url || "")}">
+            <label class="form-label" for="topic-file-${topic.id}">Заменить ссылку прикреплённым файлом</label>
+            <input class="form-control file-control" type="file" id="topic-file-${topic.id}" accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.ods,.txt,.png,.jpg,.jpeg,.zip">
             <label class="form-label" for="topic-group-${topic.id}">Группа</label>
             <select class="form-control" id="topic-group-${topic.id}" ${topic.isCommon ? "disabled" : ""}>${groupOptions(topic.group || "МН-4-25-01")}</select>
             <label><input type="checkbox" id="topic-common-${topic.id}" ${topic.isCommon ? "checked" : ""}
@@ -546,9 +679,11 @@ async function createTopic() {
     const title = document.getElementById("newTopicTitle").value.trim();
     const subject = document.getElementById("newTopicSubject").value.trim();
     const deadline = apiDate(document.getElementById("newTopicDeadline").value);
-    const url = document.getElementById("newTopicUrl").value.trim();
     if (!title) { showStatus("Введите название темы."); return; }
     if (!subject) { showStatus("Укажите предмет."); return; }
+    let url;
+    try { url = await materialUrl("newTopicUrl", "newTopicFile"); }
+    catch (error) { showStatus(error.message, 5000); return; }
     const payload = {action: "create_topic", title, subject, url, ...topicScopePayload("newTopic")};
     if (deadline) payload.deadline = deadline;
     if (await performAction(payload)) renderTopicEditor();
@@ -569,10 +704,12 @@ async function addTopicDrafts() {
         .map(line => line.replace(/^\s*(?:\d+[.)]|[-–—•])\s*/, "").trim()).filter(Boolean);
     const subject = document.getElementById("draftTopicSubject").value.trim();
     const deadline = apiDate(document.getElementById("draftTopicDeadline").value);
-    const url = document.getElementById("draftTopicUrl").value.trim();
     if (!titles.length) { showStatus("Добавьте названия тем построчно."); return; }
     if (titles.length > 50) { showStatus("За один раз можно добавить до 50 тем."); return; }
     if (!subject) { showStatus("Укажите предмет для списка тем."); return; }
+    let url;
+    try { url = await materialUrl("draftTopicUrl", "draftTopicFile"); }
+    catch (error) { showStatus(error.message, 5000); return; }
     const payload = {action: "add_topic_drafts", titles, subject, url, ...topicScopePayload("draftTopic")};
     if (deadline) payload.deadline = deadline;
     if (await performAction(payload)) renderTopicEditor();
@@ -597,8 +734,10 @@ async function saveTopic(topicId) {
     const title = document.getElementById(`topic-title-${topicId}`).value.trim();
     const subject = document.getElementById(`topic-subject-${topicId}`).value.trim();
     const deadline = apiDate(document.getElementById(`topic-deadline-${topicId}`).value);
-    const url = document.getElementById(`topic-url-${topicId}`).value.trim();
     if (!subject) { showStatus("Укажите предмет."); return; }
+    let url;
+    try { url = await materialUrl(`topic-url-${topicId}`, `topic-file-${topicId}`); }
+    catch (error) { showStatus(error.message, 5000); return; }
     const payload = {action: "update_topic", topicId, title, subject, url, ...topicScopePayload(String(topicId))};
     if (deadline) payload.deadline = deadline;
     if (await performAction(payload)) renderTopicEditor();
@@ -662,6 +801,7 @@ function renderScheduleEditor() {
     editingHomework = false;
     editingAudit = false;
     editingStats = false;
+    editingAnnouncements = false;
     editingSchedule = true;
     const todayStart = calendarTime(studyToday());
     const lessons = [...adminLessons].sort((a, b) => {
@@ -708,6 +848,7 @@ async function deleteLesson(lessonId) {
 }
 
 const notificationTypes = [
+    {id: "announcements", title: "Объявления", description: "Важные сообщения от администраторов."},
     {id: "assignments", title: "Домашние задания", description: "Новая домашка и напоминания за день до сдачи."},
     {id: "schedule", title: "Изменения расписания", description: "Сообщение при обновлении расписания."},
     {id: "lessons", title: "Напоминания о парах", description: "Одна сводка за день примерно за час до первой пары."},
@@ -721,6 +862,7 @@ function renderAdminStats() {
     editingSchedule = false;
     editingHomework = false;
     editingAudit = false;
+    editingAnnouncements = false;
     editingStats = true;
     const stats = adminStats || {registeredUsers: 0, visitsToday: 0, visits7Days: 0,
         visits30Days: 0, dailyVisits: [], notifications: []};
@@ -808,6 +950,64 @@ function setHomeworkView(value) {
     renderHomework();
 }
 
+function renderAnnouncementEditor() {
+    if (!isAdmin) return;
+    editingProfile = false;
+    editingTopics = false;
+    editingSchedule = false;
+    editingHomework = false;
+    editingAudit = false;
+    editingStats = false;
+    editingAnnouncements = true;
+    document.getElementById("adminContent").innerHTML = `<div class="profile-card card admin-editor">
+        <h3 class="section-title">Объявления</h3>
+        <h4>Новое объявление</h4>
+        <div class="admin-create-grid">
+            <div class="wide"><label class="form-label" for="newAnnouncementTitle">Заголовок</label>
+            <input class="form-control" id="newAnnouncementTitle" maxlength="120" placeholder="Например, перенос занятия"></div>
+            <div class="wide"><label class="form-label" for="newAnnouncementBody">Текст</label>
+            <textarea class="form-control" id="newAnnouncementBody" maxlength="2000" rows="5" placeholder="Что нужно знать студентам"></textarea></div>
+            <div class="wide"><label class="form-label" for="newAnnouncementUrl">Ссылка, необязательно</label>
+            <input class="form-control" type="url" id="newAnnouncementUrl" maxlength="1000" placeholder="https://..."></div>
+        </div>
+        <button class="btn btn-primary" onclick="createAnnouncement()">Опубликовать</button>
+        <div class="admin-records">${adminAnnouncements.length ? adminAnnouncements.map(item => `<details class="admin-record">
+            <summary>${escapeHtml(item.title)}</summary>
+            <label class="form-label" for="announcement-title-${item.id}">Заголовок</label>
+            <input class="form-control" id="announcement-title-${item.id}" maxlength="120" value="${escapeHtml(item.title)}">
+            <label class="form-label" for="announcement-body-${item.id}">Текст</label>
+            <textarea class="form-control" id="announcement-body-${item.id}" maxlength="2000" rows="5">${escapeHtml(item.body)}</textarea>
+            <label class="form-label" for="announcement-url-${item.id}">Ссылка</label>
+            <input class="form-control" type="url" id="announcement-url-${item.id}" maxlength="1000" placeholder="https://..." value="${escapeHtml(item.url || "")}">
+            <div class="admin-actions"><button class="btn btn-outline" onclick="saveAnnouncement(${item.id})">Сохранить</button>
+            <button class="btn btn-danger" onclick="deleteAnnouncement(${item.id})">Удалить</button></div>
+        </details>`).join("") : '<div class="empty-state compact">Объявлений пока нет.</div>'}</div>
+        <button class="btn btn-secondary" onclick="closeAnnouncementEditor()">К управлению</button></div>`;
+}
+
+async function createAnnouncement() {
+    const title = document.getElementById("newAnnouncementTitle").value.trim();
+    const body = document.getElementById("newAnnouncementBody").value.trim();
+    const url = document.getElementById("newAnnouncementUrl").value.trim();
+    if (!title || !body) { showStatus("Заполните заголовок и текст объявления."); return; }
+    if (await performAction({action: "create_announcement", title, body, url})) renderAnnouncementEditor();
+}
+
+async function saveAnnouncement(announcementId) {
+    const title = document.getElementById(`announcement-title-${announcementId}`).value.trim();
+    const body = document.getElementById(`announcement-body-${announcementId}`).value.trim();
+    const url = document.getElementById(`announcement-url-${announcementId}`).value.trim();
+    if (!title || !body) { showStatus("Заполните заголовок и текст объявления."); return; }
+    if (await performAction({action: "update_announcement", announcementId, title, body, url})) renderAnnouncementEditor();
+}
+
+async function deleteAnnouncement(announcementId) {
+    if (!window.confirm("Удалить объявление?")) return;
+    if (await performAction({action: "delete_announcement", announcementId})) renderAnnouncementEditor();
+}
+
+function closeAnnouncementEditor() { editingAnnouncements = false; renderAdmin(); }
+
 function renderHomeworkEditor() {
     if (!isAdmin) return;
     editingProfile = false;
@@ -815,6 +1015,7 @@ function renderHomeworkEditor() {
     editingSchedule = false;
     editingAudit = false;
     editingStats = false;
+    editingAnnouncements = false;
     editingHomework = true;
     document.getElementById("adminContent").innerHTML = `<div class="profile-card card admin-editor">
         <h3 class="section-title">Управление домашкой</h3>
@@ -828,6 +1029,8 @@ function renderHomeworkEditor() {
             <input class="form-control" type="date" id="newAssignmentDeadline"></div>
             <div class="wide"><label class="form-label" for="newAssignmentUrl">Ссылка, необязательно</label>
             <input class="form-control" type="url" id="newAssignmentUrl" maxlength="1000" placeholder="https://..."></div>
+            <div class="wide"><label class="form-label" for="newAssignmentFile">Или прикрепить файл, до 10 МБ</label>
+            <input class="form-control file-control" type="file" id="newAssignmentFile" accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.ods,.txt,.png,.jpg,.jpeg,.zip"></div>
         </div>
         <button class="btn btn-primary" onclick="createAssignment()">Добавить задание</button>
         <div class="admin-records">${adminAssignments.length ? adminAssignments.map(item => `<details class="admin-record ${item.archived ? "archived" : ""}">
@@ -840,6 +1043,8 @@ function renderHomeworkEditor() {
             <input class="form-control" type="date" id="assignment-deadline-${item.id}" value="${dateInputValue(item.deadline)}">
             <label class="form-label" for="assignment-url-${item.id}">Ссылка</label>
             <input class="form-control" type="url" id="assignment-url-${item.id}" maxlength="1000" placeholder="https://..." value="${escapeHtml(item.url || "")}">
+            <label class="form-label" for="assignment-file-${item.id}">Заменить ссылку прикреплённым файлом</label>
+            <input class="form-control file-control" type="file" id="assignment-file-${item.id}" accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.ods,.txt,.png,.jpg,.jpeg,.zip">
             <div class="admin-actions">
                 <button class="btn btn-outline" onclick="saveAssignment(${item.id})">Сохранить</button>
                 <button class="btn btn-danger" onclick="deleteAssignment(${item.id})">Удалить</button>
@@ -854,6 +1059,7 @@ function renderAuditLog() {
     editingSchedule = false;
     editingHomework = false;
     editingStats = false;
+    editingAnnouncements = false;
     editingAudit = true;
     const actionNames = {create: "Создание", update: "Изменение", delete: "Удаление",
         archive: "Архив", restore: "Восстановление", deadline: "Срок",
@@ -884,6 +1090,8 @@ async function createAssignment() {
     if (!payload.subject || !payload.description || !payload.deadline) {
         showStatus("Заполните предмет, описание и срок."); return;
     }
+    try { payload.url = await materialUrl("newAssignmentUrl", "newAssignmentFile"); }
+    catch (error) { showStatus(error.message, 5000); return; }
     if (await performAction({action: "create_assignment", ...payload})) renderHomeworkEditor();
 }
 
@@ -897,6 +1105,8 @@ async function saveAssignment(assignmentId) {
     if (!payload.subject || !payload.description || !payload.deadline) {
         showStatus("Заполните предмет, описание и срок."); return;
     }
+    try { payload.url = await materialUrl(`assignment-url-${assignmentId}`, `assignment-file-${assignmentId}`); }
+    catch (error) { showStatus(error.message, 5000); return; }
     if (await performAction({action: "update_assignment", assignmentId, ...payload})) renderHomeworkEditor();
 }
 
@@ -1256,7 +1466,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     function switchTab(tabName) {
 
-        if (!["schedule", "homework", "reports", "cabinet", "admin", "notifications"].includes(tabName)) return;
+        if (!["today", "schedule", "homework", "reports", "cabinet", "admin", "notifications"].includes(tabName)) return;
         if (registrationRequired() && tabName !== "cabinet") {
             tabName = "cabinet";
             if (!document.getElementById("profileFirst")) showRegistrationForm();

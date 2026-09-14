@@ -203,6 +203,22 @@ class Database:
                 visits INTEGER NOT NULL DEFAULT 1,
                 last_seen REAL NOT NULL,
                 PRIMARY KEY(activity_date, user_id))''')
+            conn.execute('''CREATE TABLE IF NOT EXISTS announcements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                body TEXT NOT NULL,
+                url TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL)''')
+            conn.execute('''CREATE TABLE IF NOT EXISTS presentation_queue (
+                queue_date TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                topic_id INTEGER NOT NULL,
+                position INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(queue_date, subject, topic_id),
+                UNIQUE(queue_date, subject, position),
+                FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE)''')
             if schema_version < 6:
                 conn.execute("DELETE FROM deadlines WHERE kind='assignments'")
                 conn.execute('''UPDATE notification_jobs SET sent_at=?
@@ -216,7 +232,7 @@ class Database:
                         (kind='assignments' AND event_key NOT LIKE 'deadline:%'))''',
                              (migration_time,))
                 conn.execute("DELETE FROM notification_settings WHERE kind IN ('bookings', 'queue')")
-            conn.execute('PRAGMA user_version=12')
+            conn.execute('PRAGMA user_version=13')
 
     @staticmethod
     def _user(conn, user_id):
@@ -690,6 +706,116 @@ class Database:
                          (time.time(), f'deadline:assignments:{assignment_id}:%'))
             return True
 
+    @staticmethod
+    def _announcement(row):
+        return dict(row) if row else None
+
+    def get_announcements(self, limit=50):
+        limit = max(1, min(int(limit), 200))
+        with self.connection() as conn:
+            return [dict(row) for row in conn.execute(
+                'SELECT * FROM announcements ORDER BY id DESC LIMIT ?', (limit,))]
+
+    def get_announcement(self, announcement_id):
+        with self.connection() as conn:
+            row = conn.execute('SELECT * FROM announcements WHERE id=?',
+                               (announcement_id,)).fetchone()
+            return self._announcement(row)
+
+    def create_announcement(self, title, body, url='', *, actor_id=None):
+        with self.connection() as conn:
+            now = timestamp()
+            cursor = conn.execute('''INSERT INTO announcements
+                (title, body, url, created_at, updated_at) VALUES (?, ?, ?, ?, ?)''',
+                                  (title, body, url, now, now))
+            announcement = self._announcement(conn.execute(
+                'SELECT * FROM announcements WHERE id=?', (cursor.lastrowid,)).fetchone())
+            link = f'\n🔗 Подробнее: {url}' if url else ''
+            self._enqueue(conn, 'announcements',
+                          f'📣 {title}\n{body}{link}',
+                          event_key=f'announcement:{announcement["id"]}', actor_id=actor_id)
+            return announcement
+
+    def update_announcement(self, announcement_id, title, body, url=''):
+        with self.connection() as conn:
+            if not conn.execute('SELECT 1 FROM announcements WHERE id=?',
+                                (announcement_id,)).fetchone():
+                raise ValueError('Объявление не найдено.')
+            conn.execute('''UPDATE announcements SET title=?, body=?, url=?, updated_at=?
+                WHERE id=?''', (title, body, url, timestamp(), announcement_id))
+            link = f'\n🔗 Подробнее: {url}' if url else ''
+            conn.execute('''UPDATE notification_jobs SET message=?
+                WHERE event_key=? AND sent_at IS NULL''',
+                         (f'📣 {title}\n{body}{link}', f'announcement:{announcement_id}'))
+            return self._announcement(conn.execute(
+                'SELECT * FROM announcements WHERE id=?', (announcement_id,)).fetchone())
+
+    def delete_announcement(self, announcement_id):
+        with self.connection() as conn:
+            cursor = conn.execute('DELETE FROM announcements WHERE id=?', (announcement_id,))
+            if not cursor.rowcount:
+                raise ValueError('Объявление не найдено.')
+            conn.execute('''UPDATE notification_jobs SET sent_at=?
+                WHERE event_key=? AND sent_at IS NULL''',
+                         (time.time(), f'announcement:{announcement_id}'))
+            return True
+
+    def get_presentation_positions(self, queue_date, subject):
+        with self.connection() as conn:
+            return [dict(row) for row in conn.execute('''SELECT topic_id, position, created_at
+                FROM presentation_queue WHERE queue_date=? AND subject=? ORDER BY position''',
+                                                        (queue_date, subject))]
+
+    def set_presentation_position(self, queue_date, subject, topic_id, user_id,
+                                  position, max_position):
+        try:
+            with self.connection() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                owns_topic = conn.execute('''SELECT 1 FROM bookings b JOIN topics t ON t.title=b.topic
+                    WHERE b.user_id=? AND t.id=? AND t.deleted=0 AND t.subject=?''',
+                                          (user_id, topic_id, subject)).fetchone()
+                if not owns_topic:
+                    raise ValueError('Вы не выступаете с этим докладом.')
+                if type(position) is not int or position < 1 or position > max_position:
+                    raise ValueError('Выберите свободное место в очереди.')
+                current = conn.execute('''SELECT position FROM presentation_queue
+                    WHERE queue_date=? AND subject=? AND topic_id=?''',
+                                       (queue_date, subject, topic_id)).fetchone()
+                if current and current['position'] == position:
+                    return False
+                occupied = conn.execute('''SELECT topic_id FROM presentation_queue
+                    WHERE queue_date=? AND subject=? AND position=?''',
+                                        (queue_date, subject, position)).fetchone()
+                if occupied and occupied['topic_id'] != topic_id:
+                    raise BookingConflict('Это место уже занято. Выберите другое.')
+                conn.execute('''DELETE FROM presentation_queue
+                    WHERE queue_date=? AND subject=? AND topic_id=?''',
+                             (queue_date, subject, topic_id))
+                conn.execute('''INSERT INTO presentation_queue
+                    (queue_date, subject, topic_id, position, created_at)
+                    VALUES (?, ?, ?, ?, ?)''',
+                             (queue_date, subject, topic_id, position, timestamp()))
+                return True
+        except sqlite3.IntegrityError as exc:
+            raise BookingConflict('Это место уже занято. Выберите другое.') from exc
+
+    def leave_presentation_queue(self, queue_date, subject, topic_id, user_id):
+        with self.connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            owns_topic = conn.execute('''SELECT 1 FROM bookings b JOIN topics t ON t.title=b.topic
+                WHERE b.user_id=? AND t.id=? AND t.deleted=0 AND t.subject=?''',
+                                      (user_id, topic_id, subject)).fetchone()
+            if not owns_topic:
+                raise ValueError('Вы не выступаете с этим докладом.')
+            return bool(conn.execute('''DELETE FROM presentation_queue
+                WHERE queue_date=? AND subject=? AND topic_id=?''',
+                                     (queue_date, subject, topic_id)).rowcount)
+
+    def clear_topic_presentation_positions(self, topic_id):
+        with self.connection() as conn:
+            return conn.execute('DELETE FROM presentation_queue WHERE topic_id=?',
+                                (topic_id,)).rowcount
+
     def book(self, topic, user_id):
         try:
             with self.connection() as conn:
@@ -723,6 +849,9 @@ class Database:
             conn.execute('BEGIN IMMEDIATE')
             rows = conn.execute('SELECT * FROM bookings WHERE topic=? AND user_id=?', (topic, user_id)).fetchall()
             conn.execute('DELETE FROM bookings WHERE topic=? AND user_id=?', (topic, user_id))
+            if not conn.execute('SELECT 1 FROM bookings WHERE topic=?', (topic,)).fetchone():
+                conn.execute('''DELETE FROM presentation_queue WHERE topic_id IN
+                    (SELECT id FROM topics WHERE title=?)''', (topic,))
             return bool(rows)
 
     def cancel_booking_as_admin(self, booking_id):
@@ -732,6 +861,9 @@ class Database:
             if not row:
                 raise ValueError('Бронирование не найдено.')
             conn.execute('DELETE FROM bookings WHERE id=?', (booking_id,))
+            if not conn.execute('SELECT 1 FROM bookings WHERE topic=?', (row['topic'],)).fetchone():
+                conn.execute('''DELETE FROM presentation_queue WHERE topic_id IN
+                    (SELECT id FROM topics WHERE title=?)''', (row['topic'],))
             return dict(row)
 
     @staticmethod

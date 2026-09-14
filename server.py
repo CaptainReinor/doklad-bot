@@ -1,5 +1,7 @@
 """Authenticated API and static Mini App. Importing this module starts nothing."""
 import sqlite3
+import uuid
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from flask import Flask, g, jsonify, request, send_from_directory
@@ -10,8 +12,14 @@ from database import Database
 from service import ActionError, Service
 from settings import ALLOWED_ORIGINS, BASE_DIR, DATABASE_PATH
 
+ALLOWED_UPLOAD_SUFFIXES = {
+    '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx',
+    '.odt', '.ods', '.txt', '.png', '.jpg', '.jpeg', '.zip'
+}
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
-def create_app(*, token=None, db_path=DATABASE_PATH, service=None):
+
+def create_app(*, token=None, db_path=DATABASE_PATH, service=None, upload_dir=None):
     if token is None:
         from config import BOT_TOKEN
         token = BOT_TOKEN
@@ -19,8 +27,9 @@ def create_app(*, token=None, db_path=DATABASE_PATH, service=None):
         db = Database(db_path)
         db.init()
         service = Service(db)
+    upload_dir = Path(upload_dir or (Path(service.db.path).parent / 'uploads')).resolve()
     app = Flask(__name__, static_folder=None)
-    app.config['MAX_CONTENT_LENGTH'] = 32 * 1024
+    app.config['MAX_CONTENT_LENGTH'] = 12 * 1024 * 1024
     app.json.ensure_ascii = False
     app.extensions['service'] = service
 
@@ -99,6 +108,30 @@ def create_app(*, token=None, db_path=DATABASE_PATH, service=None):
         message = service.perform(user_id, data, g.telegram_user)
         return jsonify(message=message, state=service.state(user_id),
                        catalog=service.catalog(user_id, public=True))
+
+    @app.post('/api/upload')
+    def upload():
+        if not service.is_admin(g.telegram_user['id']):
+            raise ActionError('Загружать материалы может только администратор.', 403)
+        uploaded = request.files.get('file')
+        original_name = Path((uploaded.filename or '').replace('\\', '/')).name.strip() if uploaded else ''
+        suffix = Path(original_name).suffix.lower()
+        if (not uploaded or not original_name or len(original_name) > 200 or
+                any(ord(char) < 32 for char in original_name) or suffix not in ALLOWED_UPLOAD_SUFFIXES):
+            raise ActionError('Выберите PDF, документ, таблицу, презентацию, изображение, TXT или ZIP.')
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        stored_name = f'{uuid.uuid4().hex}{suffix}'
+        destination = upload_dir / stored_name
+        uploaded.save(destination)
+        size = destination.stat().st_size
+        if not 0 < size <= MAX_UPLOAD_BYTES:
+            destination.unlink(missing_ok=True)
+            raise ActionError('Файл должен быть непустым и не больше 10 МБ.')
+        return jsonify(path=f'/files/{stored_name}', name=original_name, size=size)
+
+    @app.get('/files/<path:filename>')
+    def uploaded_file(filename):
+        return send_from_directory(upload_dir, filename, as_attachment=True)
 
     @app.get('/')
     @app.get('/<path:filename>')
