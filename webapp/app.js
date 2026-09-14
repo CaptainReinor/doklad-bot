@@ -40,11 +40,32 @@ function resourceButton(value, label = "🔗 Открыть материалы")
         target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>` : "";
 }
 
+function registrationRequired() {
+    return Boolean(tg?.initData) && connected && !isRegistered;
+}
+
+function syncRegistrationGate() {
+    const required = registrationRequired();
+    const wasRequired = document.body.classList.contains("registration-required");
+    document.body.classList.toggle("registration-required", required);
+    if (required) {
+        switchTab("cabinet");
+        if (!wasRequired || !document.getElementById("profileFirst")) showRegistrationForm();
+    }
+}
+
 if (tg) {
     tg.ready();
     tg.expand();
     tg.BackButton?.show();
-    tg.BackButton?.onClick(() => tg.close());
+    tg.BackButton?.onClick(() => {
+        if (registrationRequired()) {
+            switchTab("cabinet");
+            if (!document.getElementById("profileFirst")) showRegistrationForm();
+            return;
+        }
+        tg.close();
+    });
 }
 
 function formatDate(value) {
@@ -77,19 +98,6 @@ function studyToday() {
     }).formatToParts(new Date());
     const p = Object.fromEntries(parts.map(item => [item.type, item.value]));
     return `${p.day}.${p.month}.${p.year}`;
-}
-
-function connectionStatus(text, error = false) {
-    const el = document.getElementById("connectionStatus");
-    const textEl = document.getElementById("connectionStatusText");
-    textEl.textContent = text;
-    el.classList.toggle("error", error);
-}
-
-function refreshedAt() {
-    return new Date().toLocaleTimeString("ru-RU", {
-        timeZone: studyTimezone, hour: "2-digit", minute: "2-digit"
-    });
 }
 
 async function api(path, payload) {
@@ -151,9 +159,7 @@ function applyState(data) {
     myBookings = bookings.filter(item => item.isMine);
     notificationSettings = data.notifications || {};
     connected = true;
-    connectionStatus(userData
-        ? `Обновлено в ${refreshedAt()} · ${userData.group_name}`
-        : `Обновлено в ${refreshedAt()} · заполните профиль во вкладке «Кабинет».`);
+    syncRegistrationGate();
 }
 
 function renderAll() {
@@ -186,30 +192,12 @@ async function refreshState() {
         renderAll();
     } catch (error) {
         if (version !== mutationVersion) return;
+        const connectionWasAvailable = connected;
         connected = false;
-        connectionStatus(error.message, true);
+        if (connectionWasAvailable) showStatus(error.message, 5000);
         renderTopics();
         renderNotifications();
     } finally { refreshing = false; }
-}
-
-async function manualRefresh() {
-    const button = document.getElementById("refreshButton");
-    if (refreshing || busy) return;
-    if (!tg?.initData) {
-        window.location.reload();
-        return;
-    }
-    button.disabled = true;
-    button.classList.add("loading");
-    connectionStatus("Обновляем данные…");
-    try {
-        await refreshState();
-        if (connected) showStatus("Данные обновлены.");
-    } finally {
-        button.disabled = false;
-        button.classList.remove("loading");
-    }
 }
 
 async function performAction(data) {
@@ -232,7 +220,7 @@ async function performAction(data) {
         showStatus(error.message, 5000);
         // A timed-out response may still have committed. Read the actual state.
         try { applyState(await api("state")); }
-        catch { connected = false; connectionStatus("Связь с сервером потеряна. Данные могут быть неактуальны.", true); }
+        catch { connected = false; }
         return false;
     } finally {
         busy = false;
@@ -348,6 +336,10 @@ function profileForm(edit = false) {
     const source = edit ? userData : (tg?.initDataUnsafe?.user || {});
     const group = source?.group_name || "";
     return `<div class="profile-card card">
+        ${edit ? "" : `<div class="registration-intro">
+            <strong>Регистрация обязательна</strong>
+            <span>Заполните имя, фамилию и учебную группу. После регистрации откроются остальные разделы приложения.</span>
+        </div>`}
         <h3 class="section-title">${edit ? "Редактирование профиля" : "Регистрация"}</h3>
         <form onsubmit="event.preventDefault(); ${edit ? "saveProfile" : "registerUser"}()">
         <div class="form-group"><label class="form-label" for="profileFirst">Имя</label>
@@ -891,16 +883,17 @@ document.addEventListener("DOMContentLoaded", async () => {
             await api("visit", {});
             applyState(await api("state"));
         }
-        else connectionStatus("Режим просмотра. Для регистрации и бронирования откройте приложение через кнопку бота.", true);
+        else showStatus("Режим просмотра. Для регистрации и бронирования откройте приложение через кнопку бота.", 5000);
     } catch (error) {
-        connectionStatus(error.message + " Показаны исходные учебные данные; актуальные сроки загрузятся при подключении.", true);
+        showStatus(error.message, 5000);
         try {
             const response = await fetch("catalog.json", {cache: "no-store"});
             if (response.ok) applyCatalog(await response.json());
-        } catch { /* The connection banner already explains the failure. */ }
+        } catch { /* The transient message already explains the failure. */ }
     }
     renderAll();
-    if (connected && !isRegistered) switchTab("cabinet");
+    syncRegistrationGate();
+    document.body.classList.remove("app-loading");
     setInterval(refreshState, 5000);
     setInterval(() => { renderSchedule(); }, 60000);
     window.addEventListener("focus", refreshState);
@@ -1368,6 +1361,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     function switchTab(tabName) {
 
         if (!["schedule", "homework", "reports", "cabinet", "notifications"].includes(tabName)) return;
+        if (registrationRequired() && tabName !== "cabinet") {
+            tabName = "cabinet";
+            if (!document.getElementById("profileFirst")) showRegistrationForm();
+        }
         document
             .querySelectorAll(".tab-content")
             .forEach(section => {

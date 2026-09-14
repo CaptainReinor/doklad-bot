@@ -1099,11 +1099,12 @@
             }
         }
     
-        .connection-status { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; padding: 7px 16px; text-align: center; font-size: 13px; background: #eff6ff; color: #1e40af; overflow-wrap: anywhere; }
-        .connection-status.error { background: #fff4e5; color: #804500; }
-        .connection-refresh { flex: 0 0 auto; width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid currentColor; border-radius: 9px; background: transparent; color: inherit; font-size: 17px; line-height: 1; }
-        .connection-refresh.loading { animation: refresh-spin .8s linear infinite; }
-        @keyframes refresh-spin { to { transform: rotate(360deg); } }
+        .app-loading .tabs-wrap, .app-loading .tab-content { visibility: hidden; }
+        .registration-required .tabs-wrap { display: none; }
+        .registration-required #cabinet { max-width: 560px; margin: 0 auto; }
+        .registration-intro { display: grid; gap: 6px; margin-bottom: 18px; padding: 14px; border-radius: 14px; background: rgba(124, 92, 255, .1); border: 1px solid rgba(124, 92, 255, .3); }
+        .registration-intro strong { font-size: 18px; }
+        .registration-intro span { color: var(--hint); }
         .booking-owner { font-size: 13px; margin: 8px 0; color: var(--hint); overflow-wrap: anywhere; }
         .form-label { display: block; }
         .admin-actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -1151,12 +1152,7 @@
     </style>
 </head>
 
-<body>
-<div id="connectionStatus" class="connection-status">
-    <span id="connectionStatusText" role="status" aria-live="polite">Загружаем данные…</span>
-    <button id="refreshButton" class="connection-refresh" type="button" aria-label="Обновить данные" title="Обновить данные" onclick="manualRefresh()">↻</button>
-</div>
-
+<body class="app-loading">
 <div class="app">
 
     <!-- HEADER -->
@@ -1539,7 +1535,7 @@
 
 
 <script src="config.js?v=20260905-2"></script>
-<script src="app.js?v=20260910-4" defer></script>
+<script src="app.js?v=20260914-1" defer></script>
 
 </body>
 </html>

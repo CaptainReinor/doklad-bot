@@ -27,7 +27,8 @@ async function main() {
             await context.route('**/telegram-web-app.js*', route => route.fulfill({contentType:'application/javascript', body:'/* Local test bridge */'}));
             await context.addInitScript(({raw, id}) => {
                 window.Telegram = { WebApp: {initData:raw, initDataUnsafe:{user:{id, first_name:'Тест', last_name:'Студент'}},
-                    ready(){}, expand(){}, close(){}, BackButton:{show(){},onClick(){}}, MainButton:{hide(){}}} };
+                    ready(){}, expand(){}, close(){ window.telegramClosed = true; },
+                    BackButton:{show(){},onClick(callback){ window.telegramBack = callback; }}, MainButton:{hide(){}}} };
             }, {raw:id ? initData(id) : '', id});
             const page = await context.newPage();
             page.on('pageerror', error => errors.push(error.message));
@@ -40,10 +41,8 @@ async function main() {
         const c = await pageFor(103);
         assert.equal((await a.locator('.brand-title').textContent()).trim(), 'МН-4-25');
         assert.match((await a.locator('#headerPeriod').textContent()).trim(), /^\p{L}+ \d{4}/u);
-        await a.getByRole('button', {name:'Обновить данные'}).click();
-        await a.waitForFunction(() => !refreshing);
-        assert.match(await a.locator('#connectionStatusText').textContent(), /Обновлено в \d{2}:\d{2}/);
-        checks.push('Manual refresh reports the time of the latest successful update');
+        assert.equal(await a.locator('#connectionStatus, #refreshButton').count(), 0);
+        checks.push('Service status bar and manual refresh control are removed');
         assert.equal((await a.locator('#schedule .section-subtitle').textContent()).trim(), 'Общее расписание занятий');
         assert.equal(await a.locator('#totalClasses').textContent(), '38');
         // Fix the browser clock to the morning of a day with two later lessons.
@@ -253,6 +252,16 @@ async function main() {
 
         const newcomer = await pageFor(104);
         assert.equal(await newcomer.locator('#cabinet').evaluate(element => element.classList.contains('active')), true);
+        assert.equal(await newcomer.locator('.tabs-wrap').isHidden(), true);
+        assert.match(await newcomer.locator('.registration-intro').textContent(), /Регистрация обязательна/);
+        await newcomer.evaluate(() => switchTab('schedule'));
+        assert.equal(await newcomer.locator('#cabinet').evaluate(element => element.classList.contains('active')), true);
+        assert.equal(await newcomer.locator('#schedule').evaluate(element => element.classList.contains('active')), false);
+        await newcomer.evaluate(() => window.telegramBack());
+        assert.equal(await newcomer.evaluate(() => window.telegramClosed === true), false);
+        await newcomer.locator('#profileFirst').fill('Новый');
+        await newcomer.evaluate(() => refreshState());
+        assert.equal(await newcomer.locator('#profileFirst').inputValue(), 'Новый');
         await newcomer.locator('#profileFirst').fill('12345');
         assert.equal(await newcomer.locator('#profileFirst').evaluate(element => element.checkValidity()), false);
         await newcomer.locator('#profileFirst').fill('Новый');
@@ -261,11 +270,12 @@ async function main() {
         await newcomer.locator('#profileGroup').selectOption('МН-4-25-02');
         await newcomer.getByRole('button', {name:'Зарегистрироваться', exact:true}).click();
         await newcomer.locator('.profile-status').filter({hasText:'Профиль активен'}).waitFor();
+        assert.equal(await newcomer.locator('.tabs-wrap').isVisible(), true);
         await newcomer.reload();
         await newcomer.evaluate(() => switchTab('cabinet'));
         await newcomer.locator('.profile-status').filter({hasText:'Профиль активен'}).waitFor();
         assert.match(await newcomer.locator('#cabinetContent').textContent(), /Студент-Тест/);
-        checks.push('New users land in Cabinet; registration survives reload; names and allowed groups are validated');
+        checks.push('Registration locks navigation until a valid profile is saved and survives reload');
 
         await b.evaluate(() => switchTab('notifications'));
         assert.equal(await b.locator('.notification-item').count(), 4);
@@ -287,7 +297,7 @@ async function main() {
         const preview = await pageFor(null, 320);
         await preview.evaluate(() => switchTab('reports'));
         assert.equal(await preview.locator('#topicsContainer button:enabled').count(), 0);
-        assert.match(await preview.locator('#connectionStatus').textContent(), /Режим просмотра/);
+        assert.equal(await preview.locator('#connectionStatus, #refreshButton').count(), 0);
         for (const page of [a,b,c,newcomer,preview]) {
             assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), true);
         }
