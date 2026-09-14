@@ -30,8 +30,9 @@ function shortSubject(value) {
 }
 
 function safeHttpsUrl(value) {
+    if (typeof value !== "string" || !value.trim()) return "";
     try {
-        const parsed = new URL(value, window.location.origin);
+        const parsed = new URL(value.trim(), window.location.origin);
         return parsed.protocol === "https:" || (parsed.protocol === "http:" && parsed.origin === window.location.origin)
             ? parsed.href : "";
     } catch { return ""; }

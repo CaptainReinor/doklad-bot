@@ -131,7 +131,7 @@ def create_app(*, token=None, db_path=DATABASE_PATH, service=None, upload_dir=No
 
     @app.get('/files/<path:filename>')
     def uploaded_file(filename):
-        return send_from_directory(upload_dir, filename, as_attachment=True)
+        return send_from_directory(upload_dir, filename, as_attachment=False)
 
     @app.get('/')
     @app.get('/<path:filename>')

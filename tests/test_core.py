@@ -750,6 +750,7 @@ def test_admin_uploads_material_and_students_can_download_it(client, headers):
     assert response.json['path'].startswith('/files/') and response.json['path'].endswith('.pdf')
     download = client.get(response.json['path'])
     assert download.status_code == 200 and download.data == b'hello'
+    assert download.headers['Content-Disposition'].startswith('inline')
     invalid = client.post('/api/upload', data={'file': (io.BytesIO(b'bad'), 'script.exe')},
                           headers=headers(ADMIN), content_type='multipart/form-data')
     assert invalid.status_code == 400

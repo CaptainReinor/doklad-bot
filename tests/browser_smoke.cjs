@@ -43,6 +43,7 @@ async function main() {
         assert.equal(await a.locator('#today').evaluate(element => element.classList.contains('active')), true);
         assert.ok(await a.locator('#today .nearby-item').count() <= 3);
         assert.match(await a.locator('#todayContent').textContent(), /Ближайшее/);
+        assert.equal(await a.locator('#today .resource-link').count(), 0);
         checks.push('Today opens as the hub and limits the next seven days to three events');
         assert.match((await a.locator('#headerPeriod').textContent()).trim(), /^\p{L}+ \d{4}/u);
         assert.equal(await a.locator('#connectionStatus, #refreshButton').count(), 0);
