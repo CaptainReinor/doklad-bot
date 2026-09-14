@@ -671,40 +671,26 @@
             font-weight: 700;
         }
 
-        /* BOOKINGS */
-
-        .booking-list {
-            display: grid;
-            gap: 10px;
+        .deadline-countdown {
+            display: inline-flex;
+            margin: 2px 0 10px;
+            padding: 5px 9px;
+            border-radius: 999px;
+            background: rgba(124, 92, 255, 0.1);
+            color: var(--purple);
+            font-size: 11px;
+            font-weight: 750;
         }
 
-        .booking-item {
-            padding: 14px;
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: 15px;
+        .deadline-countdown.soon {
+            background: rgba(234, 152, 46, 0.13);
+            color: #b56800;
         }
 
-        .booking-title {
-            margin-bottom: 6px;
-            font-weight: 700;
-            font-size: 14px;
-        }
-
-        .booking-meta {
-            margin-bottom: 11px;
-            color: var(--hint);
-            font-size: 12px;
-        }
-
-        .booking-actions {
-            display: flex;
-            gap: 8px;
-        }
-
-        .booking-actions .btn {
-            width: auto;
-            flex: 1;
+        .deadline-countdown.today,
+        .deadline-countdown.overdue {
+            background: rgba(216, 69, 69, 0.12);
+            color: #c03737;
         }
 
         /* NOTIFICATIONS */
@@ -908,10 +894,6 @@
                 grid-template-columns: repeat(2, minmax(0, 1fr));
             }
 
-            .booking-list {
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-            }
-
             .notification-list {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
             }
@@ -1015,10 +997,6 @@
                 padding: 6px 7px;
             }
 
-            .booking-actions {
-                flex-direction: column;
-            }
-
             .notification-item {
                 padding: 12px;
             }
@@ -1043,11 +1021,6 @@
                 min-height: 70px;
             }
 
-        }
-
-        .booking-item.archived {
-            opacity: 0.82;
-            border-style: dashed;
         }
 
         .topic-card.archived {
@@ -1206,6 +1179,15 @@
                 onclick="switchTab('cabinet')"
             >
                 👤 Кабинет
+            </button>
+
+            <button
+                class="tab"
+                data-tab="admin"
+                onclick="switchTab('admin')"
+                hidden
+            >
+                🛠 Админ
             </button>
 
             <button
@@ -1419,74 +1401,6 @@
             id="topicsContainer"
             class="topics-list"
         ></div>
-
-        <hr>
-
-        <h3
-            class="section-title"
-            style="font-size:17px;"
-        >
-            📋 Мои бронирования
-        </h3>
-
-        <p class="section-subtitle">
-            Выбранные темы докладов
-        </p>
-
-        <div
-            class="stats-grid"
-            style="margin-bottom:12px;"
-        >
-            <div class="stat-card">
-                <span
-                    class="number blue"
-                    id="myBookingsCount"
-                >
-                    0
-                </span>
-
-                <span class="label">
-                    Мои темы
-                </span>
-            </div>
-
-            <div class="stat-card">
-                <span
-                    class="number green"
-                    id="myProgress"
-                >
-                    0%
-                </span>
-
-                <span class="label">
-                    Прогресс
-                </span>
-            </div>
-
-            <div class="stat-card">
-                <span class="number purple" id="myDeadline">
-                    —
-                </span>
-
-                <span class="label">
-                    Дедлайн
-                </span>
-            </div>
-        </div>
-
-        <div
-            id="myBookingsContainer"
-            class="booking-list"
-        ></div>
-
-        <div class="mt-12">
-            <button
-                class="btn btn-outline"
-                onclick="exportBookings()"
-            >
-                📤 Экспортировать мои темы
-            </button>
-        </div>
     </section>
 
 
@@ -1505,6 +1419,24 @@
         </p>
 
         <div id="cabinetContent"></div>
+    </section>
+
+
+    <!-- ==================== АДМИН ==================== -->
+
+    <section
+        id="admin"
+        class="tab-content"
+    >
+        <h2 class="section-title">
+            🛠 Админ
+        </h2>
+
+        <p class="section-subtitle">
+            Управление содержимым приложения
+        </p>
+
+        <div id="adminContent"></div>
     </section>
 
 
@@ -1535,7 +1467,7 @@
 
 
 <script src="config.js?v=20260905-2"></script>
-<script src="app.js?v=20260914-1" defer></script>
+<script src="app.js?v=20260914-2" defer></script>
 
 </body>
 </html>

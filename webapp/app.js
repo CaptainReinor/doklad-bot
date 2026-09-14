@@ -100,6 +100,26 @@ function studyToday() {
     return `${p.day}.${p.month}.${p.year}`;
 }
 
+function deadlineCountdown(value) {
+    if (!/^\d{2}\.\d{2}\.\d{4}$/.test(value || "")) return null;
+    const days = Math.round((calendarTime(value) - calendarTime(studyToday())) / 86400000);
+    if (days < 0) return {text: "Срок прошёл", className: "overdue"};
+    if (days === 0) return {text: "Срок сегодня", className: "today"};
+    if (days === 1) return {text: "Остался 1 день", className: "soon"};
+    const lastTwo = days % 100;
+    const last = days % 10;
+    const ending = last === 1 && lastTwo !== 11 ? "день"
+        : [2, 3, 4].includes(last) && ![12, 13, 14].includes(lastTwo) ? "дня" : "дней";
+    return {text: `Осталось ${days} ${ending}`, className: days <= 3 ? "soon" : ""};
+}
+
+function deadlineCountdownMarkup(value) {
+    const countdown = deadlineCountdown(value);
+    return countdown
+        ? `<div class="deadline-countdown ${countdown.className}">⏳ ${escapeHtml(countdown.text)}</div>`
+        : "";
+}
+
 async function api(path, payload) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 12000);
@@ -159,6 +179,9 @@ function applyState(data) {
     myBookings = bookings.filter(item => item.isMine);
     notificationSettings = data.notifications || {};
     connected = true;
+    const adminTab = document.querySelector('.tab[data-tab="admin"]');
+    if (adminTab) adminTab.hidden = !isAdmin;
+    if (!isAdmin && document.getElementById("admin")?.classList.contains("active")) switchTab("cabinet");
     syncRegistrationGate();
 }
 
@@ -166,18 +189,15 @@ function renderAll() {
     renderSchedule();
     renderTopics();
     renderHomework();
-    renderMyBookings();
     renderNotifications();
-    if (editingStats) renderAdminStats();
-    else if (!editingProfile && !editingTopics && !editingSchedule && !editingHomework && !editingAudit) renderCabinet();
-    document.querySelectorAll('#cabinetContent button[type="submit"]').forEach(button => {
+    if (!editingProfile) renderCabinet();
+    if (isAdmin) {
+        if (editingStats) renderAdminStats();
+        else if (!editingTopics && !editingSchedule && !editingHomework && !editingAudit) renderAdmin();
+    }
+    document.querySelectorAll('#cabinetContent button[type="submit"], #adminContent button[type="submit"]').forEach(button => {
         button.disabled = !connected || busy;
     });
-    const nearest = myBookings.filter(item => !item.archived)
-        .map(b => topicsData.find(t => t.id === b.id)?.deadline)
-        .filter(Boolean).sort((a, b) => calendarTime(a) - calendarTime(b))[0];
-    const el = document.getElementById("myDeadline");
-    if (el) el.textContent = nearest || "—";
 }
 
 async function refreshState() {
@@ -268,6 +288,7 @@ function renderTopics() {
             <div class="topic-title">${escapeHtml(topic.title)}</div>
             <div class="booking-owner" title="${escapeHtml(topic.subject || "Предмет не указан")}">📘 ${escapeHtml(shortSubject(topic.subject))}</div>
             <div class="booking-owner">Срок: ${escapeHtml(topic.deadline || "Не назначен")}</div>
+            ${deadlineCountdownMarkup(topic.deadline)}
             <div class="booking-owner">🎓 ${escapeHtml(scope)}</div>
             ${topic.isMulti ? '<div class="booking-owner">🎤 Несколько выступающих</div>' : ""}
             ${owners.map(b => `<div class="booking-owner">👥 ${escapeHtml(b.group)} · ${escapeHtml(b.user)}${b.isMine ? " (вы)" : ""}</div>`).join("")}
@@ -389,15 +410,25 @@ function renderCabinet() {
         <button class="btn btn-outline" onclick="editProfile()">✏️ Редактировать профиль</button></div>
         <div class="profile-card card"><h3 class="section-title">Моя активность</h3>
         <p>Выбранных тем: ${myBookings.length}</p><p>Проведено занятий: ${scheduleData.filter(i => lessonEnd(i) < studyNow()).length}</p>
-        <p>Домашних заданий: ${assignmentsData.filter(item => !item.archived).length}</p></div>
-        ${isAdmin ? `<div class="profile-card card"><h3 class="section-title">Администрирование</h3>
-            <div class="admin-actions">
-            <button class="btn btn-primary" onclick="renderTopicEditor()">📚 Управление темами</button>
-            <button class="btn btn-primary" onclick="renderHomeworkEditor()">📝 Управление домашкой</button>
-            <button class="btn btn-primary" onclick="renderScheduleEditor()">🗓 Управление расписанием</button>
-            <button class="btn btn-primary" onclick="renderAdminStats()">📊 Статистика</button>
-            <button class="btn btn-outline" onclick="renderAuditLog()">🕘 История действий</button>
-            </div></div>` : ""}`;
+        <p>Домашних заданий: ${assignmentsData.filter(item => !item.archived).length}</p></div>`;
+}
+
+function renderAdmin() {
+    if (!isAdmin) return;
+    editingTopics = false;
+    editingSchedule = false;
+    editingHomework = false;
+    editingAudit = false;
+    editingStats = false;
+    document.getElementById("adminContent").innerHTML = `<div class="profile-card card">
+        <h3 class="section-title">Управление</h3>
+        <div class="admin-actions">
+        <button class="btn btn-primary" onclick="renderTopicEditor()">📚 Управление темами</button>
+        <button class="btn btn-primary" onclick="renderHomeworkEditor()">📝 Управление домашкой</button>
+        <button class="btn btn-primary" onclick="renderScheduleEditor()">🗓 Управление расписанием</button>
+        <button class="btn btn-primary" onclick="renderAdminStats()">📊 Статистика</button>
+        <button class="btn btn-outline" onclick="renderAuditLog()">🕘 История действий</button>
+        </div></div>`;
 }
 
 function dateInputValue(value) {
@@ -419,7 +450,7 @@ function renderTopicEditor() {
         `<option value="${escapeHtml(subject)}" ${subject === selected ? "selected" : ""}>${escapeHtml(shortSubject(subject))}</option>`).join("")}`;
     const groupOptions = selected => ["МН-4-25-01", "МН-4-25-02"].map(group =>
         `<option value="${group}" ${group === selected ? "selected" : ""}>${group}</option>`).join("");
-    document.getElementById("cabinetContent").innerHTML = `<div class="profile-card card admin-editor">
+    document.getElementById("adminContent").innerHTML = `<div class="profile-card card admin-editor">
         <h3 class="section-title">Управление темами</h3>
         <h4>Добавить тему доклада</h4>
         <div class="admin-create-grid">
@@ -489,7 +520,7 @@ function renderTopicEditor() {
                 <button class="btn btn-secondary" onclick="toggleTopic(${topic.id}, ${!topic.active})">${topic.active ? "В архив" : "Восстановить"}</button>
                 <button class="btn btn-danger" onclick="deleteTopic(${topic.id})" ${topic.bookings.length ? "disabled" : ""}>Удалить</button>
             </div></article>`).join("")}</div>
-        <button class="btn btn-secondary" onclick="closeTopicEditor()">Вернуться в кабинет</button></div>`;
+        <button class="btn btn-secondary" onclick="closeTopicEditor()">К управлению</button></div>`;
 }
 
 function syncTopicScope(prefix) {
@@ -509,7 +540,7 @@ function topicScopePayload(prefix) {
     };
 }
 
-function closeTopicEditor() { editingTopics = false; renderCabinet(); }
+function closeTopicEditor() { editingTopics = false; renderAdmin(); }
 
 async function createTopic() {
     const title = document.getElementById("newTopicTitle").value.trim();
@@ -641,7 +672,7 @@ function renderScheduleEditor() {
     });
     const subjects = [...new Set(adminLessons.map(lesson => lesson.subject).filter(Boolean))]
         .sort((a, b) => a.localeCompare(b, "ru"));
-    document.getElementById("cabinetContent").innerHTML = `<div class="profile-card card admin-editor">
+    document.getElementById("adminContent").innerHTML = `<div class="profile-card card admin-editor">
         <h3 class="section-title">Управление расписанием</h3>
         <datalist id="scheduleSubjectSuggestions">${subjects.map(subject => `<option value="${escapeHtml(subject)}"></option>`).join("")}</datalist>
         <h4>Добавить занятие</h4>${lessonFields("newLesson")}
@@ -654,10 +685,10 @@ function renderScheduleEditor() {
                 <button class="btn btn-secondary" onclick="toggleLesson(${lesson.id}, ${!lesson.active})">${lesson.active ? "В архив" : "Восстановить"}</button>
                 <button class="btn btn-danger" onclick="deleteLesson(${lesson.id})">Удалить</button>
             </div></details>`).join("")}</div>
-        <button class="btn btn-secondary" onclick="closeScheduleEditor()">Вернуться в кабинет</button></div>`;
+        <button class="btn btn-secondary" onclick="closeScheduleEditor()">К управлению</button></div>`;
 }
 
-function closeScheduleEditor() { editingSchedule = false; renderCabinet(); }
+function closeScheduleEditor() { editingSchedule = false; renderAdmin(); }
 
 async function createLesson() {
     if (await performAction({action: "create_lesson", ...lessonPayload("newLesson")})) renderScheduleEditor();
@@ -714,7 +745,7 @@ function renderAdminStats() {
             <span>${Number(item.enabled) || 0} из ${Number(stats.registeredUsers) || 0} пользователей</span></div>
             <b>${Number(item.percent) || 0}%</b>
         </div>`).join("");
-    document.getElementById("cabinetContent").innerHTML = `<div class="profile-card card admin-editor">
+    document.getElementById("adminContent").innerHTML = `<div class="profile-card card admin-editor">
         <h3 class="section-title">Статистика</h3>
         <div class="stats-grid admin-stats-grid">
             <div class="stat-card"><div class="number">${Number(stats.registeredUsers) || 0}</div><div class="label">Пользователей</div></div>
@@ -726,7 +757,7 @@ function renderAdminStats() {
         <div class="activity-chart-scroll"><div class="activity-chart" role="img" aria-label="График входов за 30 дней">${chart}</div></div>
         <h4>Включённые уведомления</h4>
         <div class="admin-notification-stats">${notificationRows || '<div class="empty-state compact">Нет данных.</div>'}</div>
-        <button class="btn btn-secondary" onclick="closeAdminStats()">Вернуться в кабинет</button>
+        <button class="btn btn-secondary" onclick="closeAdminStats()">К управлению</button>
     </div>`;
     requestAnimationFrame(() => {
         const scroller = document.querySelector(".activity-chart-scroll");
@@ -734,7 +765,7 @@ function renderAdminStats() {
     });
 }
 
-function closeAdminStats() { editingStats = false; renderCabinet(); }
+function closeAdminStats() { editingStats = false; renderAdmin(); }
 
 function renderNotifications() {
     document.getElementById("notificationsContainer").innerHTML = notificationTypes.map(item => `
@@ -765,6 +796,7 @@ function renderHomework() {
         <div class="booking-owner" title="${escapeHtml(item.subject)}">📘 ${escapeHtml(shortSubject(item.subject))}</div>
         <div class="homework-description">${escapeHtml(item.description)}</div>
         <div class="booking-owner">📅 Срок: ${escapeHtml(item.deadline)}</div>
+        ${deadlineCountdownMarkup(item.deadline)}
         ${resourceButton(item.url)}
         ${item.archived ? '<div class="archive-label">Архив</div>' : ""}
     </article>`).join("") : `<div class="empty-state">${currentHomeworkView === "archive"
@@ -784,7 +816,7 @@ function renderHomeworkEditor() {
     editingAudit = false;
     editingStats = false;
     editingHomework = true;
-    document.getElementById("cabinetContent").innerHTML = `<div class="profile-card card admin-editor">
+    document.getElementById("adminContent").innerHTML = `<div class="profile-card card admin-editor">
         <h3 class="section-title">Управление домашкой</h3>
         <h4>Добавить домашнее задание</h4>
         <div class="admin-create-grid">
@@ -812,7 +844,7 @@ function renderHomeworkEditor() {
                 <button class="btn btn-outline" onclick="saveAssignment(${item.id})">Сохранить</button>
                 <button class="btn btn-danger" onclick="deleteAssignment(${item.id})">Удалить</button>
             </div></details>`).join("") : `<div class="empty-state">Домашних заданий пока нет.</div>`}</div>
-        <button class="btn btn-secondary" onclick="closeHomeworkEditor()">Вернуться в кабинет</button></div>`;
+        <button class="btn btn-secondary" onclick="closeHomeworkEditor()">К управлению</button></div>`;
 }
 
 function renderAuditLog() {
@@ -826,17 +858,17 @@ function renderAuditLog() {
     const actionNames = {create: "Создание", update: "Изменение", delete: "Удаление",
         archive: "Архив", restore: "Восстановление", deadline: "Срок",
         cancel_booking: "Бронирование", publish: "Публикация"};
-    document.getElementById("cabinetContent").innerHTML = `<div class="profile-card card admin-editor">
+    document.getElementById("adminContent").innerHTML = `<div class="profile-card card admin-editor">
         <h3 class="section-title">История действий</h3>
         <p class="draft-help">Последние действия администраторов. Хранится до 300 записей.</p>
         <div class="audit-list">${adminAuditLog.length ? adminAuditLog.map(item => `<article class="audit-item">
             <div><strong>${escapeHtml(actionNames[item.action] || item.action)}</strong><span>${escapeHtml(item.actor)}</span></div>
             <p>${escapeHtml(item.summary)}</p><time>${escapeHtml(new Date(item.createdAt).toLocaleString("ru-RU"))}</time>
         </article>`).join("") : '<div class="empty-state">История пока пуста.</div>'}</div>
-        <button class="btn btn-secondary" onclick="closeAuditLog()">Вернуться в кабинет</button></div>`;
+        <button class="btn btn-secondary" onclick="closeAuditLog()">К управлению</button></div>`;
 }
 
-function closeAuditLog() { editingAudit = false; renderCabinet(); }
+function closeAuditLog() { editingAudit = false; renderAdmin(); }
 
 function assignmentPayload(prefix) {
     return {
@@ -873,7 +905,7 @@ async function deleteAssignment(assignmentId) {
     if (await performAction({action: "delete_assignment", assignmentId})) renderHomeworkEditor();
 }
 
-function closeHomeworkEditor() { editingHomework = false; renderCabinet(); }
+function closeHomeworkEditor() { editingHomework = false; renderAdmin(); }
 
 document.addEventListener("DOMContentLoaded", async () => {
     setupFilters();
@@ -1178,142 +1210,6 @@ document.addEventListener("DOMContentLoaded", async () => {
             });
     }
 
-    function renderMyBookings() {
-        const container =
-            document.getElementById(
-                "myBookingsContainer"
-            );
-
-        const count =
-            document.getElementById(
-                "myBookingsCount"
-            );
-
-        const progress =
-            document.getElementById(
-                "myProgress"
-            );
-
-        if (count) {
-            count.textContent =
-                myBookings.length;
-        }
-
-        const activeTopics = topicsData.filter(item => !item.archived);
-        const activeBookings = myBookings.filter(item => !item.archived);
-        const progressValue = activeTopics.length ?
-            Math.min(
-                100,
-                Math.round(
-                    (activeBookings.length /
-                        activeTopics.length) *
-                    100
-                )
-            ) : 0;
-
-        if (progress) {
-            progress.textContent =
-                progressValue + "%";
-        }
-
-        if (!container) return;
-
-        if (!myBookings.length) {
-
-            container.innerHTML = `
-                <div class="empty-state">
-                    <div class="icon">📚</div>
-
-                    <div>
-                        Вы пока не выбрали тему доклада.
-                    </div>
-
-                    <div
-                        class="muted"
-                        style="margin-top:5px;"
-                    >
-                        Выберите тему выше.
-                    </div>
-                </div>
-            `;
-
-            return;
-        }
-
-        container.innerHTML =
-            myBookings.map(item => `
-                <article class="booking-item ${item.archived ? "archived" : ""}">
-
-                    <div class="booking-title">
-                        №${item.id}. ${escapeHtml(item.title)}
-                    </div>
-
-                    <div class="booking-meta">
-                        Предмет: ${escapeHtml(shortSubject(item.subject))}<br>
-                        Забронировано:
-                        ${escapeHtml(formatDate(item.date))}
-                    </div>
-
-                    ${resourceButton(item.url)}
-                    ${item.archived ? '<div class="archive-label">Архив</div>' : ""}
-
-                    <div class="booking-actions">
-
-                        <button
-                            class="btn btn-danger"
-                            onclick="cancelBooking(${item.id})" ${!connected || busy || item.id === null ? "disabled" : ""}
-                        >
-                            Отменить
-                        </button>
-
-                    </div>
-
-                </article>
-            `).join("");
-    }
-
-    function exportBookings() {
-        if (!myBookings.length) {
-            showStatus("Нет выбранных тем для экспорта.");
-            return;
-        }
-
-        const text =
-            [
-                "Мои темы докладов",
-                "",
-                ...myBookings.map(
-                    item =>
-                        `${item.id}. ${item.title}${item.subject ? ` — ${item.subject}` : ""}`
-                )
-            ].join("\n");
-
-        const blob =
-            new Blob(
-                [text],
-                {
-                    type: "text/plain;charset=utf-8"
-                }
-            );
-
-        const url =
-            URL.createObjectURL(blob);
-
-        const link =
-            document.createElement("a");
-
-        link.href = url;
-        link.download = "мои-доклады.txt";
-
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-
-        URL.revokeObjectURL(url);
-
-        showStatus("Список тем экспортирован.");
-    }
-
     async function downloadSchedule() {
         if (downloadSchedule.pending) return;
         if (typeof html2pdf !== "function") {
@@ -1360,11 +1256,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     function switchTab(tabName) {
 
-        if (!["schedule", "homework", "reports", "cabinet", "notifications"].includes(tabName)) return;
+        if (!["schedule", "homework", "reports", "cabinet", "admin", "notifications"].includes(tabName)) return;
         if (registrationRequired() && tabName !== "cabinet") {
             tabName = "cabinet";
             if (!document.getElementById("profileFirst")) showRegistrationForm();
         }
+        if (tabName === "admin" && !isAdmin) tabName = "cabinet";
         document
             .querySelectorAll(".tab-content")
             .forEach(section => {
@@ -1402,6 +1299,8 @@ document.addEventListener("DOMContentLoaded", async () => {
                 });
             } catch (error) {}
         }
+
+        if (tabName === "admin") renderAdmin();
 
         window.scrollTo({
             top: 0,
