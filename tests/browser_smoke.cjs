@@ -44,11 +44,15 @@ async function main() {
         assert.ok(await a.locator('#today .nearby-item').count() <= 3);
         assert.match(await a.locator('#todayContent').textContent(), /Ближайшее/);
         assert.equal(await a.locator('#today .resource-link').count(), 0);
+        assert.deepEqual(await a.evaluate(() => scheduleData.filter(item => item.subject === ENGLISH_SUBJECT)
+            .map(item => item.group)), Array(5).fill('МН-4-25-01'));
+        assert.deepEqual(await b.evaluate(() => scheduleData.filter(item => item.subject === ENGLISH_SUBJECT)
+            .map(item => item.group)), Array(5).fill('МН-4-25-02'));
         checks.push('Today opens as the hub and limits the next seven days to three events');
         assert.match((await a.locator('#headerPeriod').textContent()).trim(), /^\p{L}+ \d{4}/u);
         assert.equal(await a.locator('#connectionStatus, #refreshButton').count(), 0);
         checks.push('Service status bar and manual refresh control are removed');
-        assert.equal((await a.locator('#schedule .section-subtitle').textContent()).trim(), 'Общее расписание занятий');
+        assert.equal((await a.locator('#schedule .section-subtitle').textContent()).trim(), 'Расписание занятий');
         assert.equal(await a.locator('#totalClasses').textContent(), '38');
         await a.evaluate(() => switchTab('schedule'));
         // Fix the browser clock to the morning of a day with two later lessons.
@@ -66,6 +70,7 @@ async function main() {
         checks.push('Upcoming is default; today is red and past dates have a separate newest-first view');
         await a.evaluate(() => switchTab('reports'));
         await b.evaluate(() => switchTab('reports'));
+        assert.equal((await a.locator('#reports .section-subtitle').textContent()).trim(), 'Выберите актуальную тему');
         assert.equal(await b.locator('#topicsContainer .topic-card').filter({hasText:'Роль проектного управления'}).count(), 0);
         assert.equal(await a.locator('#topicsContainer .topic-card').filter({hasText:'Доклад только второй группы'}).count(), 0);
         const commonA = a.locator('#topicsContainer .topic-card').filter({hasText:'Общий тестовый доклад'});
@@ -259,10 +264,14 @@ async function main() {
         await admin.locator('#newLesson-start').fill('18:30');
         await admin.locator('#newLesson-end').fill('19:50');
         await admin.locator('#newLesson-type').selectOption({label:'ПЗ'});
+        assert.equal(await admin.locator('#newLesson-group').isDisabled(), true);
+        await admin.locator('#newLesson-subject').fill('Иностранный язык профессиональных коммуникаций');
+        assert.equal(await admin.locator('#newLesson-group').isEnabled(), true);
+        await admin.locator('#newLesson-group').selectOption('МН-4-25-02');
         await admin.locator('#newLesson-subject').fill('Управление бизнес-процессами');
         assert.equal(await admin.locator('#newLesson-teacher').inputValue(), 'Золотухин В.А.');
         await admin.locator('#newLesson-room').fill('СДО');
-        assert.equal(await admin.locator('#newLesson-group').count(), 0);
+        assert.equal(await admin.locator('#newLesson-group').isDisabled(), true);
         await admin.locator('#newLesson-url').fill('https://example.edu/lesson/123');
         await admin.getByRole('button', {name:'Добавить занятие'}).click();
         await admin.locator('.admin-record').filter({hasText:'31.12.2026'}).waitFor();
@@ -272,7 +281,23 @@ async function main() {
         assert.equal(await linkedLesson.count(), 1);
         assert.equal(await linkedLesson.getByRole('link', {name:'🔗 Подключиться к паре'}).getAttribute('href'), 'https://example.edu/lesson/123');
         assert.equal(await b.locator('#scheduleContainer .schedule-card').filter({hasText:'08.09.2026'}).getByRole('link', {name:/Подключиться/}).count(), 0);
-        checks.push('Schedule is common to both groups; admin-created link appears only on the linked lesson');
+        checks.push('Schedule is shared except for group-specific English; admin-created links stay attached to their lesson');
+        const linkLabels = await pageFor(102);
+        await linkLabels.clock.install({time: new Date('2026-12-24T10:00:00+03:00')});
+        await linkLabels.evaluate(() => switchTab('today'));
+        const futureLinkedLesson = linkLabels.locator('#today .nearby-item').filter({hasText:'31.12.2026'});
+        assert.equal(await futureLinkedLesson.getByRole('link', {name:'Ссылка на пару'}).getAttribute('href'),
+            'https://example.edu/lesson/123');
+        await linkLabels.evaluate(() => {
+            scheduleData = [{date:studyToday(), day:'Чт.', time:'11.00–12.20', type:'Л',
+                subject:'Тестовая пара', teacher:'Иванов И.И.', room:'Онлайн',
+                group:'', url:'https://example.edu/lesson/today'}];
+            assignmentsData = []; topicsData = []; myBookings = []; announcementsData = []; presentationQueues = [];
+            renderToday();
+        });
+        assert.equal(await linkLabels.getByRole('link', {name:'Подключиться к паре'}).getAttribute('href'),
+            'https://example.edu/lesson/today');
+        await linkLabels.context().close();
         const todayIso = await admin.evaluate(() => studyToday().split('.').reverse().join('-'));
         await admin.locator('#newLesson-date').fill(todayIso);
         await admin.locator('#newLesson-start').fill('20:00');
@@ -281,9 +306,11 @@ async function main() {
         await admin.locator('#newLesson-subject').fill('Управление бизнес-процессами');
         await admin.locator('#newLesson-room').fill('Онлайн');
         await admin.getByRole('button', {name:'Добавить занятие'}).click();
-        await admin.locator('.admin-record').filter({hasText:await admin.evaluate(() => studyToday())}).waitFor();
+        await admin.waitForFunction(() => !busy);
+        await admin.locator('.admin-record').filter({hasText:'20.00–21.20'}).waitFor();
         await admin.evaluate(() => closeScheduleEditor());
         await admin.getByRole('button', {name:'📚 Управление темами'}).click();
+        await admin.locator('#newTopicTitle').waitFor();
         await admin.locator('#newTopicTitle').fill('Доклад для очереди сегодня');
         await admin.locator('#newTopicSubject').selectOption({label:'Бизнес-процессы'});
         await admin.locator('#newTopicDeadline').fill(todayIso);

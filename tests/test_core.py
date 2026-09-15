@@ -12,20 +12,60 @@ from auth import validate_init_data
 from catalog import load_catalog
 from database import Database
 from notifications import check_notifications, is_deadline_tomorrow
-from service import ActionError, Service, clean_group
+from service import ENGLISH_SUBJECT, ActionError, Service, clean_group
 
 
-def test_catalog_schedule_matches_first_group_policy():
+def test_catalog_schedule_only_splits_professional_english():
     schedule = load_catalog()['schedule']
-    english_dates = {item['date'] for item in schedule
-                     if item['subject'] == 'Иностранный язык профессиональных коммуникаций'}
+    english = [item for item in schedule if item['subject'] == ENGLISH_SUBJECT]
 
-    assert len(schedule) == 38
-    assert english_dates == {'09.09.2026', '23.09.2026', '07.10.2026',
-                             '21.10.2026', '11.11.2026'}
-    assert all(item['group'] == '' and item['room'] == 'СДО РАНХиГС' for item in schedule)
+    assert len(schedule) == 43
+    assert {item['date'] for item in english if item['group'] == 'МН-4-25-01'} == {
+        '09.09.2026', '23.09.2026', '07.10.2026', '21.10.2026', '11.11.2026'}
+    assert {item['date'] for item in english if item['group'] == 'МН-4-25-02'} == {
+        '16.09.2026', '30.09.2026', '14.10.2026', '28.10.2026', '18.11.2026'}
+    assert all(item['group'] == '' for item in schedule if item['subject'] != ENGLISH_SUBJECT)
+    assert all(item['room'] == 'СДО РАНХиГС' for item in schedule)
     assert not any(item['subject'] == 'Научно-исследовательская работа (П)'
                    or item['subject'].startswith('Практика по профилю') for item in schedule)
+
+
+def test_public_schedule_filters_only_english_by_registered_group(service):
+    register(service, 1, 'МН-4-25-01')
+    register(service, 2, 'МН-4-25-02')
+    first = service.catalog(1, public=True)['schedule']
+    second = service.catalog(2, public=True)['schedule']
+
+    assert len(first) == len(second) == 38
+    assert {item['id'] for item in first if item['subject'] != ENGLISH_SUBJECT} == {
+        item['id'] for item in second if item['subject'] != ENGLISH_SUBJECT}
+    assert {item['group'] for item in first if item['subject'] == ENGLISH_SUBJECT} == {'МН-4-25-01'}
+    assert {item['group'] for item in second if item['subject'] == ENGLISH_SUBJECT} == {'МН-4-25-02'}
+    assert not any(item['subject'] == ENGLISH_SUBJECT
+                   for item in service.catalog(3, public=True)['schedule'])
+    assert len(service.catalog(ADMIN, public=True)['schedule']) == 43
+
+
+def test_v14_migration_restores_grouped_english_lessons(tmp_path):
+    db = Database(tmp_path / 'schedule.db')
+    db.init()
+    with db.connection() as conn:
+        conn.execute("UPDATE lessons SET group_name='' WHERE subject=? AND group_name=?",
+                     (ENGLISH_SUBJECT, 'МН-4-25-01'))
+        conn.execute('''UPDATE lessons SET active=0, deleted=1
+            WHERE subject=? AND group_name=? AND lesson_date<>'30.09.2026' ''',
+                     (ENGLISH_SUBJECT, 'МН-4-25-02'))
+        conn.execute("DELETE FROM lessons WHERE subject=? AND lesson_date='30.09.2026'",
+                     (ENGLISH_SUBJECT,))
+        conn.execute('PRAGMA user_version=13')
+    db.init()
+
+    english = [item for item in db.get_lessons() if item['subject'] == ENGLISH_SUBJECT]
+    assert len(english) == 10
+    assert sum(item['group'] == 'МН-4-25-01' for item in english) == 5
+    assert sum(item['group'] == 'МН-4-25-02' for item in english) == 5
+    with db.connection() as conn:
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 14
 
 
 def test_auth_signature_identity_and_extra_signature_field():
@@ -219,7 +259,7 @@ def test_v7_migration_preserves_cross_group_bookings_and_locks_topic(tmp_path):
     topic = next(item for item in db.get_topics(include_inactive=True) if item['id'] == 1)
     assert topic['is_common'] is True and topic['is_multi'] is False
     assert len(db.get_all_bookings()) == 2
-    assert sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0] == 13
+    assert sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0] == 14
 
 
 def test_db_location_does_not_follow_cwd(db, monkeypatch, tmp_path):
@@ -393,6 +433,27 @@ def test_lesson_reminder_is_one_daily_common_digest_with_full_details(service):
     assert Database(service.db.path).get_notification_settings(1)['lessons'] is True
 
 
+def test_english_lesson_reminders_follow_the_students_group(service):
+    register(service, 1, group='МН-4-25-01')
+    register(service, 2, group='МН-4-25-02')
+    for user_id in (1, 2):
+        service.perform(user_id, {'action': 'notification_settings',
+                                  'type': 'lessons', 'enabled': True})
+    for group, url in [('МН-4-25-01', 'https://meet.example/english-01'),
+                       ('МН-4-25-02', 'https://meet.example/english-02')]:
+        service.perform(ADMIN, {'action': 'create_lesson', 'date': '14.12.2026',
+                                'time': '18:30-21:20', 'type': 'ПЗ',
+                                'subject': ENGLISH_SUBJECT, 'teacher': 'Санжарова О.Н.',
+                                'room': 'СДО', 'group': group, 'url': url})
+
+    sent = {}
+    check_notifications(service, lambda uid, msg: sent.setdefault(uid, msg),
+                        now=datetime(2026, 12, 14, 17, 30))
+    assert set(sent) == {1, 2}
+    assert 'english-01' in sent[1] and 'english-02' not in sent[1]
+    assert 'english-02' in sent[2] and 'english-01' not in sent[2]
+
+
 def test_schedule_change_notification_only_after_change(db):
     db.save_user(1, 'Иван', 'Иванов', 'МН-4-25-01')
     db.set_notification(1, 'schedule', True)
@@ -561,6 +622,27 @@ def test_admin_schedule_management_and_validation(service):
         service.perform(ADMIN, {'action': 'create_lesson', **{**lesson, 'url': 'javascript:alert(1)'}})
 
 
+def test_admin_assigns_groups_only_to_english_lessons(service):
+    register(service, 1, 'МН-4-25-01')
+    register(service, 2, 'МН-4-25-02')
+    english = {'date': '31.12.2026', 'time': '18:30-21:20', 'type': 'ПЗ',
+               'subject': ENGLISH_SUBJECT, 'teacher': 'Санжарова О.Н.',
+               'room': 'СДО', 'group': 'МН-4-25-02'}
+    service.perform(ADMIN, {'action': 'create_lesson', **english})
+    assert not any(item['date'] == english['date']
+                   for item in service.catalog(1, public=True)['schedule'])
+    assert any(item['date'] == english['date'] and item['group'] == 'МН-4-25-02'
+               for item in service.catalog(2, public=True)['schedule'])
+    with pytest.raises(ActionError, match='Выберите группу'):
+        service.perform(ADMIN, {'action': 'create_lesson', **{**english, 'group': ''}})
+
+    common = {**english, 'date': '30.12.2026', 'subject': 'Общая дисциплина'}
+    service.perform(ADMIN, {'action': 'create_lesson', **common})
+    created = next(item for item in service.catalog()['schedule']
+                   if item['date'] == common['date'] and item['subject'] == common['subject'])
+    assert created['group'] == ''
+
+
 @pytest.mark.parametrize('payload', [None, [], 'abc', {'action': 'book_topic'},
                                     {'action': 'book_topic', 'topicId': True},
                                     {'action': 'notification_settings', 'type': 'assignments', 'enabled': 'false'},
@@ -680,7 +762,7 @@ def test_announcements_are_admin_only_and_default_notification_is_sent(service):
 
 
 def test_presentation_queue_is_automatic_and_has_one_slot_per_booked_report(service, monkeypatch):
-    today = '14.09.2026'
+    today = '14.12.2099'
     subject = 'Управление бизнес-процессами'
     monkeypatch.setattr(Service, '_today_string', staticmethod(lambda: today))
     register(service, 1)
@@ -726,14 +808,15 @@ def test_presentation_queue_is_automatic_and_has_one_slot_per_booked_report(serv
 
 
 def test_presentation_queue_requires_matching_lesson_and_deadline(service, monkeypatch):
-    monkeypatch.setattr(Service, '_today_string', staticmethod(lambda: '14.09.2026'))
+    today = '14.12.2099'
+    monkeypatch.setattr(Service, '_today_string', staticmethod(lambda: today))
     register(service, 1)
     today_subjects = {item['subject'] for item in service.catalog()['schedule']
-                      if item['date'] == '14.09.2026'}
+                      if item['date'] == today}
     subject = next(item['subject'] for item in service.catalog()['schedule']
                    if item['subject'] not in today_subjects)
     service.perform(ADMIN, {'action': 'create_topic', 'title': 'Доклад без сегодняшней пары',
-                            'subject': subject, 'deadline': '14.09.2026',
+                            'subject': subject, 'deadline': today,
                             'isCommon': False, 'isMulti': False, 'group': 'МН-4-25-01'})
     topic = next(item for item in service.topics() if item['title'] == 'Доклад без сегодняшней пары')
     service.perform(1, {'action': 'book_topic', 'topicId': topic['id']})

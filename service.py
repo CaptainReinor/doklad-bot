@@ -10,6 +10,7 @@ from database import BookingConflict, TopicInUse
 from settings import ADMIN_IDS, APP_TIMEZONE
 
 ALLOWED_GROUPS = ('МН-4-25-01', 'МН-4-25-02')
+ENGLISH_SUBJECT = 'Иностранный язык профессиональных коммуникаций'
 
 
 class ActionError(ValueError):
@@ -109,17 +110,19 @@ class Service:
             raise ActionError('Тип занятия должен быть «Л» или «ПЗ».')
         day_names = ('Пн.', 'Вт.', 'Ср.', 'Чт.', 'Пт.', 'Сб.', 'Вс.')
         meeting_url = Service._optional_url(data.get('url', ''), 'пару')
+        subject = clean_text(data.get('subject'), 'название дисциплины', 3, 200)
+        if subject == ENGLISH_SUBJECT and not data.get('group'):
+            raise ActionError('Выберите группу для занятия по английскому.')
         return {
             'date': value,
             'day': day_names[lesson_date.weekday()],
             'time': f'{start_hour:02d}.{start_minute:02d}–{end_hour:02d}.{end_minute:02d}',
             'type': lesson_type,
-            'subject': clean_text(data.get('subject'), 'название дисциплины', 3, 200),
+            'subject': subject,
             'teacher': clean_text(data.get('teacher'), 'преподавателя', 2, 100),
             'room': clean_text(data.get('room'), 'аудиторию', 1, 100),
-            # The timetable is shared by both student groups.  Keep the legacy
-            # database column empty so old deployments can migrate in place.
-            'group': '',
+            # Only professional English has separate timetables for the two groups.
+            'group': clean_group(data.get('group')) if subject == ENGLISH_SUBJECT else '',
             'url': meeting_url
         }
 
@@ -196,6 +199,15 @@ class Service:
         return [topic for topic in topics
                 if topic['isCommon'] or topic['group'] == user['group_name']]
 
+    def visible_lessons(self, user_id=None, *, include_inactive=False):
+        lessons = self.db.get_lessons(include_inactive=include_inactive)
+        if user_id is not None and self.is_admin(user_id):
+            return lessons
+        user = self.db.get_user(user_id) if user_id is not None else None
+        group_name = user['group_name'] if user else None
+        return [lesson for lesson in lessons
+                if lesson['subject'] != ENGLISH_SUBJECT or lesson['group'] == group_name]
+
     def find_topic(self, topic_id, *, include_inactive=False):
         for topic in self.topics(include_inactive=include_inactive):
             if type(topic_id) is int and topic['id'] == topic_id:
@@ -208,7 +220,7 @@ class Service:
 
     def presentation_queues(self, user_id, queue_date=None):
         queue_date = queue_date or self._today_string()
-        lessons = [item for item in self.db.get_lessons()
+        lessons = [item for item in self.visible_lessons(user_id)
                    if item['date'] == queue_date]
         subjects = sorted({item['subject'] for item in lessons})
         topics = [item for item in self.topics(include_inactive=True)
@@ -252,7 +264,7 @@ class Service:
 
     def catalog(self, user_id=None, *, public=False):
         result = load_catalog()
-        result['schedule'] = self.db.get_lessons()
+        result['schedule'] = (self.visible_lessons(user_id) if public else self.db.get_lessons())
         result['topics'] = (self.visible_topics(user_id, include_inactive=True)
                             if public else self.topics())
         result['assignments'] = self.assignments()

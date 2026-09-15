@@ -76,21 +76,21 @@ def check_notifications(service, send_message, *, now=None):
     fingerprint = hashlib.sha256(json.dumps(catalog['schedule'], sort_keys=True).encode()).hexdigest()
     service.db.observe_schedule(fingerprint)
     users = service.db.get_all_users()
-    lessons_by_day = {}
-    for lesson in catalog['schedule']:
-        start = lesson_start(lesson, timezone)
-        if start is None or start <= now:
-            continue
-        lessons_by_day.setdefault(lesson['date'], []).append(lesson)
-    for lesson_date, lessons in lessons_by_day.items():
-        lessons.sort(key=lambda item: lesson_start(item, timezone))
-        first_start = lesson_start(lessons[0], timezone)
-        if first_start - now > timedelta(hours=1):
-            continue
-        recipients = {user['user_id'] for user in users}
-        service.db.enqueue_notification(
-            'lessons', lesson_day_message(lessons, now, timezone),
-            f'lesson-day:{lesson_date}', recipients)
+    for user in users:
+        lessons_by_day = {}
+        for lesson in service.visible_lessons(user['user_id']):
+            start = lesson_start(lesson, timezone)
+            if start is None or start <= now:
+                continue
+            lessons_by_day.setdefault(lesson['date'], []).append(lesson)
+        for lesson_date, lessons in lessons_by_day.items():
+            lessons.sort(key=lambda item: lesson_start(item, timezone))
+            first_start = lesson_start(lessons[0], timezone)
+            if first_start - now > timedelta(hours=1):
+                continue
+            service.db.enqueue_notification(
+                'lessons', lesson_day_message(lessons, now, timezone),
+                f'lesson-day:{lesson_date}', {user['user_id']})
     bookings = service.db.get_all_bookings()
     for kind in ('assignments', 'topics'):
         for item in catalog[kind]:

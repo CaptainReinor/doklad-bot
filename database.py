@@ -232,7 +232,33 @@ class Database:
                         (kind='assignments' AND event_key NOT LIKE 'deadline:%'))''',
                              (migration_time,))
                 conn.execute("DELETE FROM notification_settings WHERE kind IN ('bookings', 'queue')")
-            conn.execute('PRAGMA user_version=13')
+            if schema_version < 14:
+                english = 'Иностранный язык профессиональных коммуникаций'
+                for lesson in (item for item in load_catalog()['schedule']
+                               if item['subject'] == english):
+                    existing = conn.execute('''SELECT id FROM lessons
+                        WHERE lesson_date=? AND subject=? AND group_name=?
+                        ORDER BY deleted, id LIMIT 1''',
+                                            (lesson['date'], english, lesson['group'])).fetchone()
+                    if existing:
+                        conn.execute('''UPDATE lessons SET active=1, deleted=0, updated_at=?
+                            WHERE id=?''', (now, existing['id']))
+                        continue
+                    shared = conn.execute('''SELECT id FROM lessons
+                        WHERE lesson_date=? AND subject=? AND group_name=''
+                        ORDER BY deleted, id LIMIT 1''', (lesson['date'], english)).fetchone()
+                    if shared:
+                        conn.execute('''UPDATE lessons SET group_name=?, active=1, deleted=0,
+                            updated_at=? WHERE id=?''', (lesson['group'], now, shared['id']))
+                        continue
+                    conn.execute('''INSERT INTO lessons
+                        (lesson_date, day_name, lesson_time, lesson_type, subject, teacher,
+                         room, group_name, meeting_url, active, deleted, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)''',
+                                 (lesson['date'], lesson['day'], lesson['time'], lesson['type'],
+                                  lesson['subject'], lesson['teacher'], lesson['room'],
+                                  lesson['group'], lesson.get('url', ''), now, now))
+            conn.execute('PRAGMA user_version=14')
 
     @staticmethod
     def _user(conn, user_id):

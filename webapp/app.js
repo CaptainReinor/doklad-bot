@@ -23,6 +23,7 @@ const SUBJECT_SHORT_NAMES = Object.freeze({
     "Управление бизнес-процессами": "Бизнес-процессы",
     "Управление программами и портфелями проектов": "Программы и портфели"
 });
+const ENGLISH_SUBJECT = "Иностранный язык профессиональных коммуникаций";
 
 function shortSubject(value) {
     if (!value) return "Без предмета";
@@ -330,7 +331,8 @@ function renderToday() {
     const nearestSection = `<section class="hub-section"><h3>⏳ Ближайшее</h3>
         <div class="hub-list">${nearest.length ? nearest.map(item => `<article class="hub-card nearby-item">
             <div class="hub-card-top"><strong>${item.icon} ${escapeHtml(item.kind)}</strong><span>${escapeHtml(item.dateLabel)}</span></div>
-            <h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.details)}</p>${resourceButton(item.url)}
+            <h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.details)}</p>${resourceButton(
+                item.url, item.kind === "Пара" ? "Ссылка на пару" : "🔗 Открыть материалы")}
         </article>`).join("") : '<div class="empty-state compact">На ближайшие семь дней событий нет.</div>'}</div></section>`;
     container.innerHTML = `${announcementSection}${lessonSection}${queueSection}${nearestSection}`;
 }
@@ -768,6 +770,23 @@ function fillTeacherFromSubject(prefix) {
         .filter(lesson => lesson.subject === subject && lesson.teacher)
         .map(lesson => lesson.teacher))];
     if (teachers.length === 1) document.getElementById(`${prefix}-teacher`).value = teachers[0];
+    syncLessonGroup(prefix);
+}
+
+function syncLessonGroup(prefix) {
+    const subject = document.getElementById(`${prefix}-subject`)?.value.trim();
+    const select = document.getElementById(`${prefix}-group`);
+    if (!select) return;
+    const separated = subject === ENGLISH_SUBJECT;
+    select.disabled = !separated;
+    if (!separated) select.value = "";
+    else if (!select.value) select.value = "МН-4-25-01";
+}
+
+function lessonGroupOptions(selected = "") {
+    return `<option value="" ${selected ? "" : "selected"}>Общее занятие</option>
+        <option value="МН-4-25-01" ${selected === "МН-4-25-01" ? "selected" : ""}>МН-4-25-01</option>
+        <option value="МН-4-25-02" ${selected === "МН-4-25-02" ? "selected" : ""}>МН-4-25-02</option>`;
 }
 
 function lessonFields(prefix, lesson = {}) {
@@ -778,6 +797,7 @@ function lessonFields(prefix, lesson = {}) {
         <div><label class="form-label" for="${prefix}-end">Окончание</label><input class="form-control" type="time" id="${prefix}-end" value="${end}"></div>
         <div><label class="form-label" for="${prefix}-type">Тип</label><select class="form-control" id="${prefix}-type"><option ${lesson.type === "Л" ? "selected" : ""}>Л</option><option ${lesson.type === "ПЗ" ? "selected" : ""}>ПЗ</option></select></div>
         <div class="wide"><label class="form-label" for="${prefix}-subject">Дисциплина</label><input class="form-control" id="${prefix}-subject" list="scheduleSubjectSuggestions" maxlength="200" value="${escapeHtml(lesson.subject || "")}" placeholder="Выберите или введите дисциплину" oninput="fillTeacherFromSubject('${prefix}')"></div>
+        <div><label class="form-label" for="${prefix}-group">Группа</label><select class="form-control" id="${prefix}-group" ${lesson.subject === ENGLISH_SUBJECT ? "" : "disabled"}>${lessonGroupOptions(lesson.group || "")}</select></div>
         <div><label class="form-label" for="${prefix}-teacher">Преподаватель</label><input class="form-control" id="${prefix}-teacher" maxlength="100" value="${escapeHtml(lesson.teacher || "")}"></div>
         <div><label class="form-label" for="${prefix}-room">Аудитория</label><input class="form-control" id="${prefix}-room" maxlength="100" value="${escapeHtml(lesson.room || "")}"></div>
         <div class="wide"><label class="form-label" for="${prefix}-url">Ссылка, необязательно</label><input class="form-control" type="url" id="${prefix}-url" maxlength="1000" placeholder="https://..." value="${escapeHtml(lesson.url || "")}"></div>
@@ -790,6 +810,7 @@ function lessonPayload(prefix) {
     return {date: apiDate(document.getElementById(`${prefix}-date`).value), time: `${start}–${end}`,
         type: document.getElementById(`${prefix}-type`).value,
         subject: document.getElementById(`${prefix}-subject`).value.trim(),
+        group: document.getElementById(`${prefix}-group`).value,
         teacher: document.getElementById(`${prefix}-teacher`).value.trim(),
         room: document.getElementById(`${prefix}-room`).value.trim(),
         url: document.getElementById(`${prefix}-url`).value.trim()};
@@ -1434,7 +1455,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         wrapper.style.cssText = "width:100%;padding:0;background:#fff;color:#172033;font:12px Arial,sans-serif;";
         const cell = "border:1px solid #cbd5e1;padding:8px;vertical-align:top;overflow-wrap:break-word;";
         wrapper.innerHTML = `<h1 style="font-size:24px;margin:0 0 8px">Расписание</h1>
-            <p style="margin:0 0 16px">Общее расписание<br>
+            <p style="margin:0 0 16px">Расписание занятий<br>
             Занятий в выгрузке: ${items.length}. Время: ${escapeHtml(studyTimezone)}.</p>
             <table style="width:100%;border-collapse:collapse;table-layout:fixed;font:12px Arial,sans-serif;color:#172033">
             <colgroup><col style="width:14%"><col style="width:17%"><col style="width:47%"><col style="width:22%"></colgroup>
