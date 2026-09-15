@@ -41,8 +41,45 @@ function safeHttpsUrl(value) {
 
 function resourceButton(value, label = "🔗 Открыть материалы") {
     const url = safeHttpsUrl(value);
-    return url ? `<a class="btn btn-outline resource-link" href="${escapeHtml(url)}"
-        target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>` : "";
+    if (!url) return "";
+    const parsed = new URL(url);
+    if (parsed.origin === window.location.origin && parsed.pathname.startsWith("/files/")) {
+        const fileName = parsed.searchParams.get("name") || decodeURIComponent(parsed.pathname.split("/").pop());
+        const downloadUrl = new URL(parsed.href);
+        downloadUrl.searchParams.set("download", "1");
+        const viewerUrl = new URL("/viewer.html", window.location.origin);
+        viewerUrl.searchParams.set("file", parsed.href);
+        return `<div class="resource-actions">
+            <a class="btn btn-outline resource-link" href="${escapeHtml(viewerUrl.href)}">${escapeHtml(label)}</a>
+            <a class="btn btn-secondary resource-download" href="${escapeHtml(downloadUrl.href)}"
+                download="${escapeHtml(fileName)}" data-file-name="${escapeHtml(fileName)}"
+                onclick="return downloadResource(event, this)">⬇️ Скачать файл</a></div>`;
+    }
+    return `<a class="btn btn-outline resource-link" href="${escapeHtml(url)}"
+        onclick="return openExternalResource(event, this)">${escapeHtml(label)}</a>`;
+}
+
+function openExternalResource(event, link) {
+    if (tg?.openLink && link?.href?.startsWith("https://")) {
+        event.preventDefault();
+        tg.openLink(link.href);
+        return false;
+    }
+    return true;
+}
+
+function downloadResource(event, link) {
+    if (tg?.downloadFile && tg?.isVersionAtLeast?.("8.0")) {
+        event.preventDefault();
+        tg.downloadFile({url: link.href, file_name: link.dataset.fileName || "Материалы"});
+        return false;
+    }
+    if (tg?.openLink) {
+        event.preventDefault();
+        tg.openLink(link.href);
+        return false;
+    }
+    return true;
 }
 
 function registrationRequired() {

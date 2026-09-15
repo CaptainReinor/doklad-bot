@@ -2,7 +2,7 @@
 import sqlite3
 import uuid
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from flask import Flask, g, jsonify, request, send_from_directory
 from werkzeug.exceptions import HTTPException
@@ -127,11 +127,28 @@ def create_app(*, token=None, db_path=DATABASE_PATH, service=None, upload_dir=No
         if not 0 < size <= MAX_UPLOAD_BYTES:
             destination.unlink(missing_ok=True)
             raise ActionError('Файл должен быть непустым и не больше 10 МБ.')
-        return jsonify(path=f'/files/{stored_name}', name=original_name, size=size)
+        return jsonify(path=f'/files/{stored_name}?name={quote(original_name)}',
+                       name=original_name, size=size)
 
     @app.get('/files/<path:filename>')
     def uploaded_file(filename):
-        return send_from_directory(upload_dir, filename, as_attachment=False)
+        stored_suffix = Path(filename).suffix.lower()
+        requested_name = Path(request.args.get('name', '').replace('\\', '/')).name.strip()
+        if (not requested_name or len(requested_name) > 200 or
+                any(ord(char) < 32 for char in requested_name) or
+                Path(requested_name).suffix.lower() != stored_suffix):
+            requested_name = filename
+        response = send_from_directory(
+            upload_dir,
+            filename,
+            as_attachment=request.args.get('download') == '1',
+            download_name=requested_name,
+            conditional=True,
+        )
+        # Telegram requires these headers for reliable downloads in all clients.
+        response.headers['Access-Control-Allow-Origin'] = 'https://web.telegram.org'
+        response.headers['Access-Control-Expose-Headers'] = 'Content-Disposition, Content-Length'
+        return response
 
     @app.get('/')
     @app.get('/<path:filename>')

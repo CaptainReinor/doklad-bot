@@ -830,10 +830,15 @@ def test_admin_uploads_material_and_students_can_download_it(client, headers):
     response = client.post('/api/upload', data={'file': (io.BytesIO(b'hello'), 'Домашка.pdf')},
                            headers=headers(ADMIN), content_type='multipart/form-data')
     assert response.status_code == 200
-    assert response.json['path'].startswith('/files/') and response.json['path'].endswith('.pdf')
+    assert response.json['path'].startswith('/files/') and '.pdf?name=' in response.json['path']
     download = client.get(response.json['path'])
     assert download.status_code == 200 and download.data == b'hello'
     assert download.headers['Content-Disposition'].startswith('inline')
+    assert "filename*=UTF-8''" in download.headers['Content-Disposition']
+    attachment = client.get(response.json['path'] + '&download=1')
+    assert attachment.status_code == 200 and attachment.data == b'hello'
+    assert attachment.headers['Content-Disposition'].startswith('attachment')
+    assert attachment.headers['Access-Control-Allow-Origin'] == 'https://web.telegram.org'
     invalid = client.post('/api/upload', data={'file': (io.BytesIO(b'bad'), 'script.exe')},
                           headers=headers(ADMIN), content_type='multipart/form-data')
     assert invalid.status_code == 400
