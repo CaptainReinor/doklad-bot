@@ -273,10 +273,10 @@ async function refreshState() {
     refreshing = true;
     const version = mutationVersion;
     try {
-        const [state, catalog] = await Promise.all([api("state"), api("catalog")]);
+        const synchronized = await api("sync");
         if (version !== mutationVersion || busy) return;
-        applyCatalog(catalog);
-        applyState(state);
+        applyCatalog(synchronized.catalog);
+        applyState(synchronized.state);
         renderAll();
     } catch (error) {
         if (version !== mutationVersion) return;
@@ -307,7 +307,11 @@ async function performAction(data) {
     } catch (error) {
         showStatus(error.message, 5000);
         // A timed-out response may still have committed. Read the actual state.
-        try { applyState(await api("state")); }
+        try {
+            const synchronized = await api("sync");
+            applyCatalog(synchronized.catalog);
+            applyState(synchronized.state);
+        }
         catch { connected = false; }
         return false;
     } finally {
@@ -1201,12 +1205,15 @@ function closeHomeworkEditor() { editingHomework = false; renderAdmin(); }
 document.addEventListener("DOMContentLoaded", async () => {
     setupFilters();
     try {
-        applyCatalog(await api("catalog"));
         if (tg?.initData) {
-            await api("visit", {});
-            applyState(await api("state"));
+            const [, synchronized] = await Promise.all([api("visit", {}), api("sync")]);
+            applyCatalog(synchronized.catalog);
+            applyState(synchronized.state);
         }
-        else showStatus("Режим просмотра. Для регистрации и бронирования откройте приложение через кнопку бота.", 5000);
+        else {
+            applyCatalog(await api("catalog"));
+            showStatus("Режим просмотра. Для регистрации и бронирования откройте приложение через кнопку бота.", 5000);
+        }
     } catch (error) {
         showStatus(error.message, 5000);
         try {
@@ -1217,7 +1224,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     renderAll();
     syncRegistrationGate();
     document.body.classList.remove("app-loading");
-    setInterval(refreshState, 5000);
+    setInterval(() => { if (!document.hidden) refreshState(); }, 15000);
     setInterval(() => { renderSchedule(); }, 60000);
     window.addEventListener("focus", refreshState);
     document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshState(); });
@@ -1501,16 +1508,38 @@ document.addEventListener("DOMContentLoaded", async () => {
             });
     }
 
+    let html2pdfLoadPromise = null;
+
+    function loadHtml2Pdf() {
+        if (typeof window.html2pdf === "function") return Promise.resolve(window.html2pdf);
+        if (html2pdfLoadPromise) return html2pdfLoadPromise;
+        html2pdfLoadPromise = new Promise((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = "html2pdf.bundle.min.js?v=20260905-2";
+            script.onload = () => typeof window.html2pdf === "function"
+                ? resolve(window.html2pdf) : reject(new Error("PDF module is unavailable"));
+            script.onerror = () => reject(new Error("PDF module failed to load"));
+            document.head.appendChild(script);
+        }).catch(error => {
+            html2pdfLoadPromise = null;
+            throw error;
+        });
+        return html2pdfLoadPromise;
+    }
+
     async function downloadSchedule() {
         if (downloadSchedule.pending) return;
-        if (typeof html2pdf !== "function") {
-            showStatus("Модуль PDF не загрузился. Проверьте подключение и обновите страницу.");
-            return;
-        }
         const items = scheduleItems(currentScheduleFilter);
         if (!items.length) { showStatus("Нет занятий для выгрузки."); return; }
         downloadSchedule.pending = true;
         showStatus("Формируем PDF...");
+        let pdfFactory;
+        try { pdfFactory = await loadHtml2Pdf(); }
+        catch {
+            showStatus("Модуль PDF не загрузился. Проверьте подключение и повторите действие.");
+            downloadSchedule.pending = false;
+            return;
+        }
         const wrapper = document.createElement("div");
         wrapper.style.cssText = "width:100%;padding:0;background:#fff;color:#172033;font:12px Arial,sans-serif;";
         const cell = "border:1px solid #cbd5e1;padding:8px;vertical-align:top;overflow-wrap:break-word;";
@@ -1528,7 +1557,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         // Render a detached export layout. Capturing cards below the scrolled page
         // produces blank leading pages and cropped content in html2canvas.
         try {
-            await html2pdf().set({
+            await pdfFactory().set({
                 margin: 10, filename: "расписание.pdf",
                 image: {type: "jpeg", quality: 0.98},
                 html2canvas: {scale: 2, backgroundColor: "#ffffff", scrollX: 0, scrollY: 0},

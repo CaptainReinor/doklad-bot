@@ -13,6 +13,7 @@ from catalog import load_catalog
 from database import Database
 from notifications import check_notifications, is_deadline_tomorrow
 from service import ENGLISH_SUBJECT, ActionError, Service, clean_group
+from storage import cleanup_uploads
 
 
 def test_catalog_schedule_only_splits_professional_english():
@@ -656,8 +657,13 @@ def test_bad_actions_return_json_errors(client, service, headers, payload):
 
 def test_api_requires_auth_and_does_not_trust_query_or_body(client, service, headers):
     assert client.get('/api/state?registered=1&user_id=900').status_code == 401
+    assert client.get('/api/sync').status_code == 401
     assert client.get('/api/catalog').status_code == 200
     register(service, 1)
+    synchronized = client.get('/api/sync', headers=headers(1))
+    assert synchronized.status_code == 200
+    assert synchronized.json['state']['user']['telegramId'] == 1
+    assert synchronized.json['catalog']['schedule']
     response = client.post('/api/action', json={'action': 'book_topic', 'topicId': 1, 'user_id': 900}, headers=headers(1))
     assert response.status_code == 200
     assert service.db.get_all_bookings()[0]['user_id'] == 1
@@ -823,7 +829,7 @@ def test_presentation_queue_requires_matching_lesson_and_deadline(service, monke
     assert service.state(1)['presentationQueues'] == []
 
 
-def test_admin_uploads_material_and_students_can_download_it(client, headers):
+def test_admin_uploads_material_and_students_can_download_it(client, service, headers):
     denied = client.post('/api/upload', data={'file': (io.BytesIO(b'hello'), 'homework.pdf')},
                          headers=headers(1), content_type='multipart/form-data')
     assert denied.status_code == 403
@@ -839,9 +845,54 @@ def test_admin_uploads_material_and_students_can_download_it(client, headers):
     assert attachment.status_code == 200 and attachment.data == b'hello'
     assert attachment.headers['Content-Disposition'].startswith('attachment')
     assert attachment.headers['Access-Control-Allow-Origin'] == 'https://web.telegram.org'
+    created = client.post('/api/action', json={
+        'action': 'create_assignment', 'subject': 'Управление бизнес-процессами',
+        'description': 'Домашка с удаляемым файлом', 'deadline': '01.01.2099',
+        'url': response.json['path'],
+    }, headers=headers(ADMIN))
+    assert created.status_code == 200
+    assignment = next(item for item in created.json['catalog']['assignments']
+                      if item['description'] == 'Домашка с удаляемым файлом')
+    stored_name = response.json['path'].split('/files/', 1)[1].split('?', 1)[0]
+    stored_file = service.db.path.parent / 'uploads' / stored_name
+    assert stored_file.exists()
+    deleted = client.post('/api/action', json={
+        'action': 'delete_assignment', 'assignmentId': assignment['id'],
+    }, headers=headers(ADMIN))
+    assert deleted.status_code == 200
+    assert not stored_file.exists()
     invalid = client.post('/api/upload', data={'file': (io.BytesIO(b'bad'), 'script.exe')},
                           headers=headers(ADMIN), content_type='multipart/form-data')
     assert invalid.status_code == 400
+
+
+def test_cleanup_removes_archived_and_orphaned_uploads_but_keeps_active_files(service):
+    upload_dir = service.db.path.parent / 'uploads'
+    upload_dir.mkdir()
+    names = {key: char * 32 + '.pdf' for key, char in {
+        'past_homework': 'a', 'past_topic': 'b', 'active': 'c', 'orphan': 'd'}.items()}
+    for name in names.values():
+        (upload_dir / name).write_bytes(b'material')
+    def url(key):
+        return f'https://app.example.com/files/{names[key]}?name=Материалы.pdf'
+    past_homework = service.db.create_assignment(
+        'Управление бизнес-процессами', 'Прошедшая домашка', '01.01.2000', url('past_homework'))
+    active_homework = service.db.create_assignment(
+        'Управление бизнес-процессами', 'Актуальная домашка', '01.01.2099', url('active'))
+    past_topic = service.db.create_topic(
+        'Прошедший доклад с файлом', 'Управление бизнес-процессами', True, False, '', url('past_topic'))
+    service.db.set_deadline('topics', past_topic['id'], '01.01.2000')
+    external = service.db.create_assignment(
+        'Управление бизнес-процессами', 'Внешняя ссылка', '01.01.2000', 'https://example.edu/file.pdf')
+
+    result = cleanup_uploads(service, force=True, orphan_grace=0)
+
+    assert result == {'detached': 2, 'deleted': 3, 'skipped': False}
+    assert service.db.get_assignment(past_homework['id'])['url'] == ''
+    assert service.find_topic(past_topic['id'], include_inactive=True)['url'] == ''
+    assert service.db.get_assignment(active_homework['id'])['url'] == url('active')
+    assert service.db.get_assignment(external['id'])['url'] == 'https://example.edu/file.pdf'
+    assert (upload_dir / names['active']).exists()
 
 
 def test_resource_links_archives_and_report_deadline_reminder(service):

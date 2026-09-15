@@ -405,22 +405,22 @@ async function main() {
         checks.push('Browser preview cannot claim registration or book; no mobile horizontal overflow');
 
         // Failed PDF dependency must give an error, not crash the whole page.
-        await preview.evaluate(() => { window.html2pdf = undefined; return downloadSchedule(); });
+        await preview.route('**/html2pdf.bundle.min.js*', route => route.abort());
+        await preview.evaluate(() => downloadSchedule());
         assert.match(await preview.locator('#status').textContent(), /Модуль PDF не загрузился/);
         checks.push('Missing PDF library is handled');
 
         await b.evaluate(() => switchTab('schedule'));
         await b.locator('[data-filter="ПЗ"]').click();
         await b.screenshot({path:path.join(artifacts, 'schedule-mobile.png'), fullPage:true});
-        if (await b.evaluate(() => typeof html2pdf === 'function')) {
-            const downloadPromise = b.waitForEvent('download', {timeout:60000});
-            await b.getByRole('button', {name:'📄 Скачать расписание PDF'}).click();
-            const download = await downloadPromise;
-            const target = path.join(artifacts, 'schedule-test.pdf');
-            await download.saveAs(target);
-            assert.ok(fs.statSync(target).size > 10000);
-            checks.push('PDF export produces a non-empty download');
-        } else checks.push('PDF library unavailable in this run; download not exercised');
+        assert.equal(await b.evaluate(() => typeof html2pdf), 'undefined');
+        const downloadPromise = b.waitForEvent('download', {timeout:60000});
+        await b.getByRole('button', {name:'📄 Скачать расписание PDF'}).click();
+        const download = await downloadPromise;
+        const target = path.join(artifacts, 'schedule-test.pdf');
+        await download.saveAs(target);
+        assert.ok(fs.statSync(target).size > 10000);
+        checks.push('PDF library loads only on demand and produces a non-empty download');
         assert.deepEqual(errors, []);
         fs.writeFileSync(path.join(artifacts, 'results.json'), JSON.stringify({checks, errors}, null, 2));
         console.log(JSON.stringify({passed:checks.length, checks, errors}, null, 2));

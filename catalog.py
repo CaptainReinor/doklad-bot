@@ -1,5 +1,7 @@
 """One source of learning data for the bot and the Mini App."""
+import copy
 import json
+from functools import lru_cache
 
 from settings import BASE_DIR
 
@@ -14,5 +16,11 @@ NOTIFICATION_DEFAULTS = {
 }
 
 
-def load_catalog():
+@lru_cache(maxsize=1)
+def _cached_catalog():
     return json.loads(CATALOG_PATH.read_text(encoding='utf-8'))
+
+
+def load_catalog():
+    # Callers enrich the result, so return an isolated copy of the cached JSON.
+    return copy.deepcopy(_cached_catalog())

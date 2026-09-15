@@ -32,6 +32,8 @@ class Database:
         conn = sqlite3.connect(self.path, timeout=15)
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA foreign_keys=ON')
+        conn.execute('PRAGMA busy_timeout=15000')
+        conn.execute('PRAGMA synchronous=NORMAL')
         try:
             with conn:
                 yield conn
@@ -41,6 +43,7 @@ class Database:
     def init(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connection() as conn:
+            conn.execute('PRAGMA journal_mode=WAL')
             schema_version = conn.execute('PRAGMA user_version').fetchone()[0]
             columns = {r['name'] for r in conn.execute('PRAGMA table_info(bookings)')}
             legacy = bool(columns) and 'group_name' not in columns
@@ -219,6 +222,15 @@ class Database:
                 PRIMARY KEY(queue_date, subject, topic_id),
                 UNIQUE(queue_date, subject, position),
                 FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE)''')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_bookings_topic ON bookings(topic)')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_bookings_user ON bookings(user_id)')
+            conn.execute('''CREATE INDEX IF NOT EXISTS idx_notification_pending
+                ON notification_jobs(sent_at, next_attempt, claimed_at)''')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_activity_date ON activity_daily(activity_date)')
+            conn.execute('''CREATE INDEX IF NOT EXISTS idx_lessons_visible
+                ON lessons(deleted, active, lesson_date)''')
+            conn.execute('''CREATE INDEX IF NOT EXISTS idx_topics_visible
+                ON topics(deleted, active, group_name)''')
             if schema_version < 6:
                 conn.execute("DELETE FROM deadlines WHERE kind='assignments'")
                 conn.execute('''UPDATE notification_jobs SET sent_at=?
@@ -316,15 +328,16 @@ class Database:
                 '''SELECT activity_date, SUM(visits) AS visits FROM activity_daily
                    WHERE activity_date BETWEEN ? AND ? GROUP BY activity_date''',
                 (first_day.isoformat(), current_day.isoformat()))}
-            user_ids = [row['user_id'] for row in conn.execute('SELECT user_id FROM users')]
-            enabled_counts = {kind: 0 for kind in NOTIFICATION_DEFAULTS}
-            for user_id in user_ids:
-                for kind, enabled in self._settings(conn, user_id).items():
-                    enabled_counts[kind] += int(enabled)
+            total_users = conn.execute('SELECT COUNT(*) FROM users').fetchone()[0]
+            enabled_counts = {kind: int(default) * total_users
+                              for kind, default in NOTIFICATION_DEFAULTS.items()}
+            for row in conn.execute('SELECT kind, enabled FROM notification_settings'):
+                if row['kind'] in NOTIFICATION_DEFAULTS:
+                    enabled_counts[row['kind']] += int(bool(row['enabled'])) - int(
+                        NOTIFICATION_DEFAULTS[row['kind']])
         daily = [{'date': (first_day + timedelta(days=offset)).isoformat(),
                   'visits': int(daily_rows.get((first_day + timedelta(days=offset)).isoformat(), 0))}
                  for offset in range(days)]
-        total_users = len(user_ids)
         return {
             'registeredUsers': total_users,
             'visitsToday': daily[-1]['visits'],
@@ -608,8 +621,7 @@ class Database:
             return True
 
     @staticmethod
-    def _lesson(conn, lesson_id):
-        row = conn.execute('SELECT * FROM lessons WHERE id=? AND deleted=0', (lesson_id,)).fetchone()
+    def _lesson_row(row):
         if not row:
             return None
         return {
@@ -619,6 +631,11 @@ class Database:
             'url': row['meeting_url'], 'active': bool(row['active'])
         }
 
+    @staticmethod
+    def _lesson(conn, lesson_id):
+        row = conn.execute('SELECT * FROM lessons WHERE id=? AND deleted=0', (lesson_id,)).fetchone()
+        return Database._lesson_row(row)
+
     def get_lesson(self, lesson_id):
         with self.connection() as conn:
             return self._lesson(conn, lesson_id)
@@ -626,11 +643,36 @@ class Database:
     def get_lessons(self, *, include_inactive=False):
         condition = 'deleted=0' if include_inactive else 'deleted=0 AND active=1'
         with self.connection() as conn:
-            ids = [row['id'] for row in conn.execute(
-                f'SELECT id FROM lessons WHERE {condition}')]
-            lessons = [self._lesson(conn, lesson_id) for lesson_id in ids]
+            lessons = [self._lesson_row(row) for row in conn.execute(
+                f'SELECT * FROM lessons WHERE {condition}')]
             return sorted(lessons, key=lambda item: (
                 datetime.strptime(item['date'], '%d.%m.%Y'), item['time'], item['id']))
+
+    def clear_material_urls(self, entries):
+        """Detach uploaded files from records after archival without touching external links."""
+        tables = {'assignments': 'assignments', 'topics': 'topics'}
+        changed = 0
+        with self.connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            for kind, item_id, expected_url in entries:
+                table = tables.get(kind)
+                if table and type(item_id) is int and isinstance(expected_url, str):
+                    changed += conn.execute(
+                        f"UPDATE {table} SET url='' WHERE id=? AND url=?",
+                        (item_id, expected_url)).rowcount
+        return changed
+
+    def material_urls(self):
+        """Return references that keep uploaded files alive."""
+        with self.connection() as conn:
+            rows = conn.execute('''
+                SELECT url FROM assignments WHERE url<>''
+                UNION ALL SELECT url FROM topics WHERE deleted=0 AND url<>''
+                UNION ALL SELECT url FROM topic_drafts WHERE url<>''
+                UNION ALL SELECT url FROM announcements WHERE url<>''
+                UNION ALL SELECT meeting_url AS url FROM lessons WHERE deleted=0 AND meeting_url<>''
+            ''')
+            return [row['url'] for row in rows]
 
     def create_lesson(self, lesson):
         with self.connection() as conn:

@@ -218,15 +218,17 @@ class Service:
     def _today_string():
         return datetime.now(ZoneInfo(APP_TIMEZONE)).strftime('%d.%m.%Y')
 
-    def presentation_queues(self, user_id, queue_date=None):
+    def presentation_queues(self, user_id, queue_date=None, *, lessons=None,
+                            topics=None, booking_rows=None):
         queue_date = queue_date or self._today_string()
-        lessons = [item for item in self.visible_lessons(user_id)
+        lessons = [item for item in (lessons if lessons is not None else self.visible_lessons(user_id))
                    if item['date'] == queue_date]
         subjects = sorted({item['subject'] for item in lessons})
-        topics = [item for item in self.topics(include_inactive=True)
+        topics = [item for item in (topics if topics is not None else self.visible_topics(
+            user_id, include_inactive=True))
                   if not item['archived'] and item.get('deadline') == queue_date
                   and item['subject'] in subjects]
-        booking_rows = self.db.get_all_bookings()
+        booking_rows = booking_rows if booking_rows is not None else self.db.get_all_bookings()
         result = []
         for subject in subjects:
             subject_lessons = [item for item in lessons if item['subject'] == subject]
@@ -278,11 +280,20 @@ class Service:
         return {**user, 'name': f"{user['first_name']} {user['last_name']}",
                 'telegramId': user['user_id'], 'username': user.get('username') or ''}
 
-    def state(self, user_id):
+    def state(self, user_id, *, catalog_data=None):
         user, rows, settings = self.db.snapshot(user_id)
-        all_topics = self.topics(include_inactive=True)
-        topics = {t['title']: t for t in all_topics}
-        visible_titles = {topic['title'] for topic in self.visible_topics(user_id, include_inactive=True)}
+        is_admin = self.is_admin(user_id)
+        all_topics = (catalog_data['topics'] if catalog_data is not None
+                      else self.topics(include_inactive=True))
+        if catalog_data is not None or is_admin:
+            visible_topics = all_topics
+        elif not user:
+            visible_topics = [topic for topic in all_topics if topic['isCommon']]
+        else:
+            visible_topics = [topic for topic in all_topics
+                              if topic['isCommon'] or topic['group'] == user['group_name']]
+        topics = {t['title']: t for t in visible_topics}
+        visible_titles = set(topics)
         visible_rows = rows if self.is_admin(user_id) else [row for row in rows if row['topic'] in visible_titles]
         bookings = [{'id': topics.get(r['topic'], {}).get('id'), 'title': r['topic'],
                       'subject': topics.get(r['topic'], {}).get('subject', ''), 'user': r['booked_by'],
@@ -290,19 +301,23 @@ class Service:
                       'archived': topics.get(r['topic'], {}).get('archived', False),
                       'url': topics.get(r['topic'], {}).get('url', ''),
                       'date': r['created_at']} for r in visible_rows]
+        announcements = self.announcements()
+        queue_lessons = catalog_data['schedule'] if catalog_data is not None else None
         result = {'user': self.public_profile(user), 'bookings': bookings,
                    'notifications': settings, 'participants': len({r['user_id'] for r in visible_rows}),
-                   'isAdmin': self.is_admin(user_id),
-                   'announcements': self.announcements(),
-                   'presentationQueues': self.presentation_queues(user_id)}
+                   'isAdmin': is_admin,
+                   'announcements': announcements,
+                   'presentationQueues': self.presentation_queues(
+                       user_id, lessons=queue_lessons, topics=visible_topics, booking_rows=rows)}
         if result['isAdmin']:
             result['adminTopics'] = [{**topic, 'bookings': [
                 {'bookingId': row['id'], 'user': row['booked_by'], 'group': row['group_name']}
                 for row in rows if row['topic'] == topic['title']
             ]} for topic in all_topics]
             result['adminLessons'] = self.db.get_lessons(include_inactive=True)
-            result['adminAssignments'] = self.assignments()
-            result['adminAnnouncements'] = self.announcements()
+            result['adminAssignments'] = (catalog_data['assignments'] if catalog_data is not None
+                                          else self.assignments())
+            result['adminAnnouncements'] = announcements
             result['adminStats'] = self.db.get_admin_stats()
             result['topicDrafts'] = [{
                 'id': row['id'], 'title': row['title'], 'subject': row['subject'],

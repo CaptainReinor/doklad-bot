@@ -8,7 +8,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --requirement requirements.txt
 
-COPY auth.py bot.py catalog.py database.py notifications.py run.py server.py service.py settings.py ./
+COPY auth.py bot.py catalog.py database.py notifications.py run.py server.py service.py settings.py storage.py ./
 COPY webapp ./webapp
 COPY deploy/docker-entrypoint.sh /usr/local/bin/telegram-bot-entrypoint
 RUN chmod 0755 /usr/local/bin/telegram-bot-entrypoint

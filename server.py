@@ -11,6 +11,7 @@ from auth import validate_init_data
 from database import Database
 from service import ActionError, Service
 from settings import ALLOWED_ORIGINS, BASE_DIR, DATABASE_PATH
+from storage import cleanup_uploads
 
 ALLOWED_UPLOAD_SUFFIXES = {
     '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx',
@@ -95,6 +96,13 @@ def create_app(*, token=None, db_path=DATABASE_PATH, service=None, upload_dir=No
     def state():
         return jsonify(service.state(g.telegram_user['id']))
 
+    @app.get('/api/sync')
+    def sync():
+        user_id = g.telegram_user['id']
+        catalog_data = service.catalog(user_id, public=True)
+        return jsonify(catalog=catalog_data,
+                       state=service.state(user_id, catalog_data=catalog_data))
+
     @app.post('/api/visit')
     def visit():
         service.record_visit(g.telegram_user['id'])
@@ -105,9 +113,27 @@ def create_app(*, token=None, db_path=DATABASE_PATH, service=None, upload_dir=No
         data = request.get_json(silent=True)
         user_id = g.telegram_user['id']
         service.record_visit(user_id)
+        cleanup_actions = {
+            'create_announcement', 'update_announcement', 'delete_announcement',
+            'create_assignment', 'update_assignment', 'delete_assignment',
+            'create_topic', 'update_topic', 'delete_topic', 'set_topic_active',
+            'set_deadline', 'add_topic_drafts', 'delete_topic_draft',
+            'clear_topic_drafts', 'publish_topic_drafts',
+        }
+        should_cleanup = isinstance(data, dict) and data.get('action') in cleanup_actions
+        previous_urls = set(service.db.material_urls()) if should_cleanup else set()
         message = service.perform(user_id, data, g.telegram_user)
-        return jsonify(message=message, state=service.state(user_id),
-                       catalog=service.catalog(user_id, public=True))
+        if should_cleanup:
+            current_urls = set(service.db.material_urls())
+            try:
+                cleanup_uploads(service, upload_dir, force=True,
+                                removed_urls=previous_urls - current_urls)
+            except Exception as exc:
+                app.logger.warning('Uploaded-file cleanup failed: %s', type(exc).__name__)
+        catalog_data = service.catalog(user_id, public=True)
+        return jsonify(message=message,
+                       state=service.state(user_id, catalog_data=catalog_data),
+                       catalog=catalog_data)
 
     @app.post('/api/upload')
     def upload():

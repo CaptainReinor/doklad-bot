@@ -11,3 +11,4 @@ pytest-cache-files-*/
 *.bak
 node_modules/
 browser-test-results/
+uploads/

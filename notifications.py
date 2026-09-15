@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from settings import APP_TIMEZONE, NOTIFICATION_INTERVAL
+from storage import cleanup_uploads
 
 logger = logging.getLogger(__name__)
 DEADLINE_REMINDER_HOUR = 9
@@ -72,10 +73,15 @@ def check_notifications(service, send_message, *, now=None):
     timezone = ZoneInfo(APP_TIMEZONE)
     now = now or datetime.now(timezone)
     now = now.astimezone(timezone) if now.tzinfo is not None else now.replace(tzinfo=timezone)
+    try:
+        cleanup_uploads(service, now=now.timestamp())
+    except Exception as exc:
+        logger.warning('Uploaded-file cleanup failed: %s', type(exc).__name__)
     catalog = service.catalog()
     fingerprint = hashlib.sha256(json.dumps(catalog['schedule'], sort_keys=True).encode()).hexdigest()
     service.db.observe_schedule(fingerprint)
     users = service.db.get_all_users()
+    users_by_id = {user['user_id']: user for user in users}
     for user in users:
         lessons_by_day = {}
         for lesson in service.visible_lessons(user['user_id']):
@@ -92,6 +98,8 @@ def check_notifications(service, send_message, *, now=None):
                 'lessons', lesson_day_message(lessons, now, timezone),
                 f'lesson-day:{lesson_date}', {user['user_id']})
     bookings = service.db.get_all_bookings()
+    items_by_kind = {kind: {item['id']: item for item in catalog[kind]}
+                     for kind in ('assignments', 'topics')}
     for kind in ('assignments', 'topics'):
         for item in catalog[kind]:
             deadline = item.get('deadline')
@@ -112,10 +120,10 @@ def check_notifications(service, send_message, *, now=None):
     for job in service.db.claim_notifications(limit=500, now=now.timestamp()):
         if job['event_key'].startswith('deadline:'):
             _, kind, item_id, deadline = job['event_key'].split(':', 3)
-            item = next((i for i in service.catalog().get(kind, []) if i['id'] == int(item_id)), None)
+            item = items_by_kind.get(kind, {}).get(int(item_id))
             still_owned = kind != 'topics' or any(
                 b['user_id'] == job['user_id'] and item and b['topic'] == item['title']
-                for b in service.db.get_all_bookings()
+                for b in bookings
             )
             # Do not retry yesterday's "tomorrow" or a cancelled report reminder.
             if not item or item.get('deadline') != deadline or not still_owned or not is_deadline_tomorrow(deadline, now):
@@ -128,8 +136,11 @@ def check_notifications(service, send_message, *, now=None):
             except (TypeError, ValueError):
                 service.db.finish_notification(job, success=True)
                 continue
-            topic = next((item for item in service.visible_topics(job['user_id'])
-                          if item['id'] == topic_id), None)
+            topic = items_by_kind['topics'].get(topic_id)
+            user = users_by_id.get(job['user_id'])
+            if topic and not (service.is_admin(job['user_id']) or topic['isCommon'] or
+                              user and topic['group'] == user['group_name']):
+                topic = None
             if not topic:
                 service.db.finish_notification(job, success=True)
                 continue
