@@ -638,13 +638,18 @@ def test_admin_topic_management_preserves_and_can_remove_bookings(service):
     assert topic['id'] not in {item['id'] for item in service.catalog()['topics']}
     admin_topic = next(item for item in service.state(ADMIN)['adminTopics'] if item['id'] == topic['id'])
     assert admin_topic['active'] is False and len(admin_topic['bookings']) == 1
-    with pytest.raises(ActionError) as occupied:
-        service.perform(ADMIN, {'action': 'delete_topic', 'topicId': topic['id']})
-    assert occupied.value.status == 409
-    service.perform(ADMIN, {'action': 'admin_cancel_booking',
-                            'bookingId': admin_topic['bookings'][0]['bookingId']})
-    service.perform(ADMIN, {'action': 'delete_topic', 'topicId': topic['id']})
+    message = service.perform(ADMIN, {'action': 'delete_archived_topic', 'topicId': topic['id']})
+    assert message == 'Тема удалена из архива. Снято бронирований: 1.'
+    assert service.db.get_all_bookings() == []
     assert topic['id'] not in {item['id'] for item in service.state(ADMIN)['adminTopics']}
+
+    service.perform(ADMIN, {'action': 'create_topic', 'title': 'Активную удалять нельзя',
+                            'subject': 'Управление бизнес-процессами', 'deadline': '31.12.2099'})
+    active_topic = next(item for item in service.catalog()['topics']
+                        if item['title'] == 'Активную удалять нельзя')
+    with pytest.raises(ActionError) as active_delete:
+        service.perform(ADMIN, {'action': 'delete_archived_topic', 'topicId': active_topic['id']})
+    assert active_delete.value.status == 409
 
 
 def test_admin_schedule_management_and_validation(service):

@@ -505,7 +505,8 @@ class Service:
                 self.db.log_audit(user_id, 'publish', 'topic_batch', None,
                                   f'Опубликовано тем: {len(topics)}')
                 return f'Опубликовано тем: {len(topics)}. Пользователи получат одну подборку.'
-            if action in ('create_topic', 'update_topic', 'set_topic_active', 'delete_topic'):
+            if action in ('create_topic', 'update_topic', 'set_topic_active', 'delete_topic',
+                          'delete_archived_topic'):
                 if not self.is_admin(user_id):
                     raise ActionError('Управлять темами может только администратор.', 403)
                 if action == 'create_topic':
@@ -559,6 +560,14 @@ class Service:
                     self.db.log_audit(user_id, 'restore' if active else 'archive', 'topic', item_id,
                                       f"{'Восстановлена' if active else 'Архивирована'} тема: {existing_topic['title']}")
                     return 'Тема возвращена из архива.' if active else 'Тема перенесена в архив.'
+                if action == 'delete_archived_topic':
+                    if not existing_topic['archived']:
+                        raise ActionError('Удалить этим способом можно только тему из архива.', 409)
+                    booking_count = self.db.delete_archived_topic(item_id)
+                    self.db.log_audit(user_id, 'delete', 'topic', item_id,
+                                      f"Удалена архивная тема: {existing_topic['title']}; снято броней: {booking_count}")
+                    return ('Тема удалена из архива.' if not booking_count else
+                            f'Тема удалена из архива. Снято бронирований: {booking_count}.')
                 self.db.delete_topic(item_id)
                 self.db.clear_topic_presentation_positions(item_id)
                 self.db.log_audit(user_id, 'delete', 'topic', item_id,

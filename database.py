@@ -687,6 +687,24 @@ class Database:
                          (time.time(), f'topic-added:{topic_id}'))
             return True
 
+    def delete_archived_topic(self, topic_id):
+        with self.connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            topic = self._topic(conn, topic_id)
+            if not topic:
+                raise ValueError('Тема не найдена.')
+            booking_count = conn.execute(
+                'SELECT COUNT(*) AS total FROM bookings WHERE topic=?', (topic['title'],)).fetchone()['total']
+            conn.execute('DELETE FROM bookings WHERE topic=?', (topic['title'],))
+            conn.execute('DELETE FROM presentation_queue WHERE topic_id=?', (topic_id,))
+            conn.execute('UPDATE topics SET active=0, deleted=1, updated_at=? WHERE id=?',
+                         (timestamp(), topic_id))
+            conn.execute("DELETE FROM deadlines WHERE kind='topics' AND item_id=?", (topic_id,))
+            conn.execute('''UPDATE notification_jobs SET sent_at=?
+                WHERE sent_at IS NULL AND (event_key=? OR event_key LIKE ?)''',
+                         (time.time(), f'topic-added:{topic_id}', f'deadline:topics:{topic_id}:%'))
+            return booking_count
+
     @staticmethod
     def _lesson_row(row):
         if not row:

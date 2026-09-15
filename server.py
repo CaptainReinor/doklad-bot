@@ -116,7 +116,7 @@ def create_app(*, token=None, db_path=DATABASE_PATH, service=None, upload_dir=No
         cleanup_actions = {
             'create_announcement', 'update_announcement', 'delete_announcement',
             'create_assignment', 'update_assignment', 'delete_assignment',
-            'create_topic', 'update_topic', 'delete_topic', 'set_topic_active',
+            'create_topic', 'update_topic', 'delete_topic', 'delete_archived_topic', 'set_topic_active',
             'set_deadline', 'add_topic_drafts', 'delete_topic_draft',
             'clear_topic_drafts', 'publish_topic_drafts',
         }

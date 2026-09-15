@@ -14,6 +14,7 @@ let editingAnnouncements = false;
 let mutationVersion = 0, refreshing = false;
 let currentScheduleFilter = "upcoming", studyTimezone = "Europe/Moscow";
 let currentTopicSubject = "all", currentTopicView = "active", currentHomeworkView = "active";
+let currentAdminTopicView = "active", currentAdminHomeworkView = "active";
 
 const SUBJECT_SHORT_NAMES = Object.freeze({
     "Иностранный язык профессиональных коммуникаций": "Профессиональный иностранный",
@@ -452,8 +453,10 @@ function renderTopics() {
             (currentTopicSubject !== "all" && currentTopicSubject !== "mine" && !subjects.includes(currentTopicSubject))) {
         currentTopicSubject = "all";
     }
+    const topicPoolIds = new Set(topicPool.map(topic => topic.id));
+    const myVisibleCount = new Set(myBookings.filter(item => topicPoolIds.has(item.id)).map(item => item.id)).size;
     filters.innerHTML = [{value: "all", label: "Все предметы"},
-        ...(isRegistered ? [{value: "mine", label: `Мои доклады · ${myBookings.length}`}] : []),
+        ...(isRegistered ? [{value: "mine", label: `Мои доклады · ${myVisibleCount}`}] : []),
         ...subjects.map(subject => ({value: subject, label: shortSubject(subject)}))]
         .map(item => `<button class="filter-btn ${currentTopicSubject === item.value ? "active" : ""}"
             data-topic-subject="${escapeHtml(item.value)}" title="${escapeHtml(item.value === "all" ? item.label : (item.value || item.label))}">
@@ -601,7 +604,7 @@ function renderCabinet() {
         <div class="info-item mb-12"><span class="label">Telegram</span><span class="value">${escapeHtml(userData.username ? "@" + userData.username : "Не указан")}</span></div>
         <button class="btn btn-outline" onclick="editProfile()">✏️ Редактировать профиль</button></div>
         <div class="profile-card card"><h3 class="section-title">Моя активность</h3>
-        <p>Выбранных тем: ${myBookings.length}</p><p>Проведено занятий: ${scheduleData.filter(i => lessonEnd(i) < studyNow()).length}</p>
+        <p>Выбранных тем: ${new Set(myBookings.filter(item => topicsData.some(topic => topic.id === item.id && !topic.archived)).map(item => item.id)).size}</p><p>Проведено занятий: ${scheduleData.filter(i => lessonEnd(i) < studyNow()).length}</p>
         <p>Домашних заданий: ${assignmentsData.filter(item => !item.archived).length}</p></div>`;
 }
 
@@ -616,8 +619,8 @@ function renderAdmin() {
     document.getElementById("adminContent").innerHTML = `<div class="profile-card card">
         <h3 class="section-title">Управление</h3>
         <div class="admin-actions">
-        <button class="btn btn-primary" onclick="renderTopicEditor()">📚 Управление темами</button>
-        <button class="btn btn-primary" onclick="renderHomeworkEditor()">📝 Управление домашкой</button>
+        <button class="btn btn-primary" onclick="openTopicEditor()">📚 Управление темами</button>
+        <button class="btn btn-primary" onclick="openHomeworkEditor()">📝 Управление домашкой</button>
         <button class="btn btn-primary" onclick="renderScheduleEditor()">🗓 Управление расписанием</button>
         <button class="btn btn-primary" onclick="renderAnnouncementEditor()">📣 Объявления</button>
         <button class="btn btn-primary" onclick="renderAdminStats()">📊 Статистика</button>
@@ -645,10 +648,17 @@ function renderTopicEditor() {
         `<option value="${escapeHtml(subject)}" ${subject === selected ? "selected" : ""}>${escapeHtml(shortSubject(subject))}</option>`).join("")}`;
     const groupOptions = selected => ["МН-4-25-01", "МН-4-25-02"].map(group =>
         `<option value="${group}" ${group === selected ? "selected" : ""}>${group}</option>`).join("");
-    const sortedAdminTopics = [...adminTopics].sort((a, b) =>
+    const topicCounts = {active: adminTopics.filter(item => !item.archived).length,
+        archive: adminTopics.filter(item => item.archived).length};
+    const sortedAdminTopics = adminTopics.filter(item => Boolean(item.archived) === (currentAdminTopicView === "archive")).sort((a, b) =>
         (a.subject || "").localeCompare(b.subject || "", "ru") || a.number - b.number || a.id - b.id);
     document.getElementById("adminContent").innerHTML = `<div class="profile-card card admin-editor">
         <h3 class="section-title">Управление темами</h3>
+        <div class="filter-row">${[{value: "active", label: `Актуальные · ${topicCounts.active}`},
+            {value: "archive", label: `Архив · ${topicCounts.archive}`}].map(item =>
+            `<button class="filter-btn ${currentAdminTopicView === item.value ? "active" : ""}"
+                onclick="setAdminTopicView('${item.value}')">${item.label}</button>`).join("")}</div>
+        <div ${currentAdminTopicView === "archive" ? "hidden" : ""}>
         <h4>Добавить тему доклада</h4>
         <div class="admin-create-grid">
             <div><label class="form-label" for="newTopicTitle">Название новой темы</label>
@@ -702,8 +712,10 @@ function renderTopicEditor() {
                     <button class="btn btn-secondary" onclick="clearTopicDrafts()">Очистить черновик</button>
                 </div>` : '<div class="empty-state compact">Черновик пуст. Он сохраняется после закрытия приложения.</div>'}
         </div>
-        <div class="admin-records">${sortedAdminTopics.map(topic => `<article class="admin-record ${topic.archived ? "archived" : ""}">
-            <div class="admin-record-heading"><strong>№${topic.number}</strong><span>${topic.active ? (topic.archived ? "Архив по сроку" : "Активна") : "В архиве"}</span></div>
+        </div>
+        <div class="admin-records">${sortedAdminTopics.map(topic => `${topic.archived
+            ? `<details class="admin-record archived"><summary>№${topic.number} · ${escapeHtml(topic.title)} · ${escapeHtml(shortSubject(topic.subject))}</summary>`
+            : `<article class="admin-record"><div class="admin-record-heading"><strong>№${topic.number}</strong><span>Активна</span></div>`}
             <label class="form-label" for="topic-title-${topic.id}">Название</label>
             <input class="form-control" id="topic-title-${topic.id}" maxlength="200" value="${escapeHtml(topic.title)}">
             <label class="form-label" for="topic-subject-${topic.id}">Предмет</label>
@@ -726,11 +738,15 @@ function renderTopicEditor() {
                 <button class="btn btn-danger btn-small" onclick="removeBooking(${item.bookingId})">Снять бронь</button></div>`).join("") : "Бронирований нет"}</div>
             <div class="admin-actions">
                 <button class="btn btn-outline" onclick="saveTopic(${topic.id})">Сохранить</button>
-                <button class="btn btn-secondary" onclick="toggleTopic(${topic.id}, ${!topic.active})">${topic.active ? "В архив" : "Восстановить"}</button>
-                <button class="btn btn-danger" onclick="deleteTopic(${topic.id})" ${topic.bookings.length ? "disabled" : ""}>Удалить</button>
-            </div></article>`).join("")}</div>
+                ${topic.archived ? (!topic.active ? `<button class="btn btn-secondary" onclick="toggleTopic(${topic.id}, true)">Восстановить</button>` : "")
+                    : `<button class="btn btn-secondary" onclick="toggleTopic(${topic.id}, false)">В архив</button>`}
+                <button class="btn btn-danger" onclick="${topic.archived ? "deleteArchivedTopic" : "deleteTopic"}(${topic.id})" ${!topic.archived && topic.bookings.length ? "disabled" : ""}>${topic.archived ? "Удалить из архива" : "Удалить"}</button>
+            </div>${topic.archived ? "</details>" : "</article>"}`).join("") || `<div class="empty-state">${currentAdminTopicView === "archive" ? "Архив тем пуст." : "Актуальных тем пока нет."}</div>`}</div>
         <button class="btn btn-secondary" onclick="closeTopicEditor()">К управлению</button></div>`;
 }
+
+function openTopicEditor() { currentAdminTopicView = "active"; renderTopicEditor(); }
+function setAdminTopicView(view) { currentAdminTopicView = view === "archive" ? "archive" : "active"; renderTopicEditor(); }
 
 function syncTopicScope(prefix) {
     const common = document.getElementById(`${prefix.includes("-") ? prefix.replace("topic-", "topic-common-") : prefix + "Common"}`);
@@ -833,6 +849,14 @@ async function toggleTopic(topicId, active) {
 async function deleteTopic(topicId) {
     if (!window.confirm("Удалить эту тему? Отменить действие будет нельзя.")) return;
     if (await performAction({action: "delete_topic", topicId})) renderTopicEditor();
+}
+
+async function deleteArchivedTopic(topicId) {
+    const topic = adminTopics.find(item => item.id === topicId);
+    const bookingCount = topic?.bookings?.length || 0;
+    const suffix = bookingCount ? ` Вместе с ней будут удалены бронирования: ${bookingCount}.` : "";
+    if (!window.confirm(`Удалить тему из архива без возможности восстановления?${suffix}`)) return;
+    if (await performAction({action: "delete_archived_topic", topicId})) renderTopicEditor();
 }
 
 async function removeBooking(bookingId) {
@@ -1119,8 +1143,17 @@ function renderHomeworkEditor() {
     editingStats = false;
     editingAnnouncements = false;
     editingHomework = true;
+    const assignmentCounts = {active: adminAssignments.filter(item => !item.archived).length,
+        archive: adminAssignments.filter(item => item.archived).length};
+    const visibleAssignments = adminAssignments.filter(item =>
+        Boolean(item.archived) === (currentAdminHomeworkView === "archive"));
     document.getElementById("adminContent").innerHTML = `<div class="profile-card card admin-editor">
         <h3 class="section-title">Управление домашкой</h3>
+        <div class="filter-row">${[{value: "active", label: `Актуальные · ${assignmentCounts.active}`},
+            {value: "archive", label: `Архив · ${assignmentCounts.archive}`}].map(item =>
+            `<button class="filter-btn ${currentAdminHomeworkView === item.value ? "active" : ""}"
+                onclick="setAdminHomeworkView('${item.value}')">${item.label}</button>`).join("")}</div>
+        <div ${currentAdminHomeworkView === "archive" ? "hidden" : ""}>
         <h4>Добавить домашнее задание</h4>
         <div class="admin-create-grid">
             <div><label class="form-label" for="newAssignmentSubject">Предмет</label>
@@ -1135,7 +1168,8 @@ function renderHomeworkEditor() {
             <input class="form-control file-control" type="file" id="newAssignmentFile" accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.ods,.txt,.png,.jpg,.jpeg,.zip"></div>
         </div>
         <button class="btn btn-primary" onclick="createAssignment()">Добавить задание</button>
-        <div class="admin-records">${adminAssignments.length ? adminAssignments.map(item => `<details class="admin-record ${item.archived ? "archived" : ""}">
+        </div>
+        <div class="admin-records">${visibleAssignments.length ? visibleAssignments.map(item => `<details class="admin-record ${item.archived ? "archived" : ""}">
             <summary>${escapeHtml(item.deadline)} · ${escapeHtml(shortSubject(item.subject))}${item.archived ? " · Архив" : ""}</summary>
             <label class="form-label" for="assignment-subject-${item.id}">Предмет</label>
             <select class="form-control" id="assignment-subject-${item.id}">${homeworkSubjectOptions(item.subject)}</select>
@@ -1149,10 +1183,13 @@ function renderHomeworkEditor() {
             <input class="form-control file-control" type="file" id="assignment-file-${item.id}" accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.ods,.txt,.png,.jpg,.jpeg,.zip">
             <div class="admin-actions">
                 <button class="btn btn-outline" onclick="saveAssignment(${item.id})">Сохранить</button>
-                <button class="btn btn-danger" onclick="deleteAssignment(${item.id})">Удалить</button>
-            </div></details>`).join("") : `<div class="empty-state">Домашних заданий пока нет.</div>`}</div>
+                <button class="btn btn-danger" onclick="deleteAssignment(${item.id})">${item.archived ? "Удалить из архива" : "Удалить"}</button>
+            </div></details>`).join("") : `<div class="empty-state">${currentAdminHomeworkView === "archive" ? "Архив домашки пуст." : "Актуальных домашних заданий пока нет."}</div>`}</div>
         <button class="btn btn-secondary" onclick="closeHomeworkEditor()">К управлению</button></div>`;
 }
+
+function openHomeworkEditor() { currentAdminHomeworkView = "active"; renderHomeworkEditor(); }
+function setAdminHomeworkView(view) { currentAdminHomeworkView = view === "archive" ? "archive" : "active"; renderHomeworkEditor(); }
 
 function renderAuditLog() {
     if (!isAdmin) return;
