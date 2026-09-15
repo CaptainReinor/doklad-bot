@@ -645,6 +645,8 @@ function renderTopicEditor() {
         `<option value="${escapeHtml(subject)}" ${subject === selected ? "selected" : ""}>${escapeHtml(shortSubject(subject))}</option>`).join("")}`;
     const groupOptions = selected => ["МН-4-25-01", "МН-4-25-02"].map(group =>
         `<option value="${group}" ${group === selected ? "selected" : ""}>${group}</option>`).join("");
+    const sortedAdminTopics = [...adminTopics].sort((a, b) =>
+        (a.subject || "").localeCompare(b.subject || "", "ru") || a.number - b.number || a.id - b.id);
     document.getElementById("adminContent").innerHTML = `<div class="profile-card card admin-editor">
         <h3 class="section-title">Управление темами</h3>
         <h4>Добавить тему доклада</h4>
@@ -700,7 +702,7 @@ function renderTopicEditor() {
                     <button class="btn btn-secondary" onclick="clearTopicDrafts()">Очистить черновик</button>
                 </div>` : '<div class="empty-state compact">Черновик пуст. Он сохраняется после закрытия приложения.</div>'}
         </div>
-        <div class="admin-records">${adminTopics.map(topic => `<article class="admin-record ${topic.archived ? "archived" : ""}">
+        <div class="admin-records">${sortedAdminTopics.map(topic => `<article class="admin-record ${topic.archived ? "archived" : ""}">
             <div class="admin-record-heading"><strong>№${topic.number}</strong><span>${topic.active ? (topic.archived ? "Архив по сроку" : "Активна") : "В архиве"}</span></div>
             <label class="form-label" for="topic-title-${topic.id}">Название</label>
             <input class="form-control" id="topic-title-${topic.id}" maxlength="200" value="${escapeHtml(topic.title)}">

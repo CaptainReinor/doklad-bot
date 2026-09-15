@@ -422,8 +422,7 @@ class Database:
     def get_topics(self, *, include_inactive=False):
         condition = 'deleted=0' if include_inactive else 'deleted=0 AND active=1'
         with self.connection() as conn:
-            rows = conn.execute(f'''SELECT * FROM topics WHERE {condition}
-                ORDER BY subject COLLATE NOCASE, display_number, id''').fetchall()
+            rows = conn.execute(f'SELECT * FROM topics WHERE {condition} ORDER BY id').fetchall()
             result = []
             for row in rows:
                 item = dict(row)
