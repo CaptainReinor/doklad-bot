@@ -208,4 +208,3 @@ def start_notification_thread(service, send_message, stop_event=None):
     thread = threading.Thread(target=run, name='notifications', daemon=True)
     thread.start()
     return stop_event, thread
-

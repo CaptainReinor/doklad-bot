@@ -183,4 +183,3 @@ tests/              автоматические проверки
 Мини-приложение передаёт Telegram `initData` в заголовке авторизации. Сервер проверяет подпись и срок действия перед чтением профиля или изменением данных. Основание: [Telegram Mini Apps — проверка данных](https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app), [pyTelegramBotAPI](https://pytba.readthedocs.io/en/latest/sync_version/index.html).
 
 PDF формируется локальной браузерной библиотекой html2pdf.js, поэтому внешнее CDN не требуется. Файл содержит изображение таблицы, поэтому поиск по его тексту не поддерживается. Пользовательские сценарии проверяются автоматизированно через тестовый Telegram-сеанс.
-

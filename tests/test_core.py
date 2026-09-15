@@ -998,4 +998,3 @@ def test_resource_links_archives_and_report_deadline_reminder(service):
         service.perform(ADMIN, {'action': 'create_assignment', 'subject': subject,
                                 'description': 'Неверная ссылка.', 'deadline': '31.12.2099',
                                 'url': 'http://example.edu/file'})
-

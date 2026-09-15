@@ -1642,4 +1642,3 @@ document.addEventListener("DOMContentLoaded", async () => {
             behavior: "smooth"
         });
     }
-

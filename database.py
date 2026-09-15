@@ -1097,4 +1097,3 @@ class Database:
 if __name__ == '__main__':
     Database().init()
     print('База данных готова к работе.')
-
