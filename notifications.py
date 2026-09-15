@@ -165,13 +165,13 @@ def check_notifications(service, send_message, *, now=None):
             entry['kinds'].add(event_kind)
             entry['jobs'].append(job)
         lines = []
-        for index, entry in enumerate(merged.values(), 1):
+        for entry in merged.values():
             topic = entry['topic']
             scope = 'Общий доклад' if topic['isCommon'] else f"Группа: {topic['group']}"
             deadline = f"\nСрок: {topic['deadline']}" if topic.get('deadline') else ''
             link = f"\nМатериалы: {topic['url']}" if topic.get('url') else ''
             lines.append(
-                f"{index}. {topic['title']}\nПредмет: {topic['subject']}\n{scope}{deadline}{link}")
+                f"№{topic['number']}. {topic['title']}\nПредмет: {topic['subject']}\n{scope}{deadline}{link}")
         kinds = {kind for entry in merged.values() for kind in entry['kinds']}
         count = len(merged)
         if kinds == {'topic-added'}:
@@ -208,3 +208,4 @@ def start_notification_thread(service, send_message, stop_event=None):
     thread = threading.Thread(target=run, name='notifications', daemon=True)
     thread.start()
     return stop_event, thread
+

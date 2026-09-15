@@ -47,7 +47,7 @@ def test_public_schedule_filters_only_english_by_registered_group(service):
     assert len(service.catalog(ADMIN, public=True)['schedule']) == 43
 
 
-def test_v14_migration_restores_grouped_english_lessons(tmp_path):
+def test_v15_migration_restores_grouped_english_lessons(tmp_path):
     db = Database(tmp_path / 'schedule.db')
     db.init()
     with db.connection() as conn:
@@ -66,7 +66,31 @@ def test_v14_migration_restores_grouped_english_lessons(tmp_path):
     assert sum(item['group'] == 'МН-4-25-01' for item in english) == 5
     assert sum(item['group'] == 'МН-4-25-02' for item in english) == 5
     with db.connection() as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 14
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 15
+
+
+def test_v15_migration_replaces_gapped_ids_with_subject_scoped_numbers(tmp_path):
+    db = Database(tmp_path / 'topic-numbers.db')
+    db.init()
+    subject = load_catalog()['topics'][0]['subject']
+    first = db.create_topic('Временная тема один', subject, False, False, 'МН-4-25-01')
+    second = db.create_topic('Тема с большим внутренним ID', subject, False, False,
+                             'МН-4-25-01')
+    db.delete_topic(first['id'])
+    third = db.create_topic('Ещё одна тема с большим ID', subject, False, False,
+                            'МН-4-25-01')
+    assert second['id'] + 1 == third['id']
+
+    with db.connection() as conn:
+        conn.execute('DROP INDEX idx_topics_subject_number')
+        conn.execute('UPDATE topics SET display_number=0')
+        conn.execute('PRAGMA user_version=14')
+    db.init()
+
+    topics = [item for item in db.get_topics(include_inactive=True)
+              if item['subject'] == subject]
+    assert [item['display_number'] for item in topics] == list(range(1, len(topics) + 1))
+    assert next(item for item in topics if item['id'] == third['id'])['display_number'] == 12
 
 
 def test_auth_signature_identity_and_extra_signature_field():
@@ -260,7 +284,7 @@ def test_v7_migration_preserves_cross_group_bookings_and_locks_topic(tmp_path):
     topic = next(item for item in db.get_topics(include_inactive=True) if item['id'] == 1)
     assert topic['is_common'] is True and topic['is_multi'] is False
     assert len(db.get_all_bookings()) == 2
-    assert sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0] == 14
+    assert sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0] == 15
 
 
 def test_db_location_does_not_follow_cwd(db, monkeypatch, tmp_path):
@@ -503,7 +527,34 @@ def test_multiple_admins_can_manage_topics(db):
     service.perform(842525310, {'action': 'create_topic', 'title': 'Тема второго администратора',
                                 'subject': 'Управление бизнес-процессами'})
     assert service.state(842525310)['isAdmin'] is True
-    assert service.catalog()['topics'][-1]['subject'] == 'Управление бизнес-процессами'
+    created = next(item for item in service.catalog()['topics']
+                   if item['title'] == 'Тема второго администратора')
+    assert created['subject'] == 'Управление бизнес-процессами'
+
+
+def test_topic_numbers_are_editable_and_independent_between_subjects(service):
+    first_subject = load_catalog()['topics'][0]['subject']
+    second_subject = 'Управление бизнес-процессами'
+    service.perform(ADMIN, {'action': 'create_topic', 'title': 'Следующая тема первого предмета',
+                            'subject': first_subject, 'group': 'МН-4-25-01'})
+    service.perform(ADMIN, {'action': 'create_topic', 'title': 'Первая тема второго предмета',
+                            'subject': second_subject, 'group': 'МН-4-25-01'})
+    topics = service.topics(include_inactive=True)
+    first = next(item for item in topics if item['title'] == 'Следующая тема первого предмета')
+    second = next(item for item in topics if item['title'] == 'Первая тема второго предмета')
+    assert first['number'] == 11
+    assert second['number'] == 1
+
+    service.perform(ADMIN, {'action': 'update_topic', 'topicId': second['id'],
+                            'number': 7, 'title': second['title'], 'subject': second_subject,
+                            'group': 'МН-4-25-01'})
+    assert service.find_topic(second['id'], include_inactive=True)['number'] == 7
+    service.perform(ADMIN, {'action': 'create_topic', 'title': 'Новый первый номер',
+                            'number': 1, 'subject': second_subject, 'group': 'МН-4-25-01'})
+    with pytest.raises(ActionError, match='уже есть тема с таким номером'):
+        service.perform(ADMIN, {'action': 'create_topic', 'title': 'Повтор номера',
+                                'number': 1, 'subject': second_subject,
+                                'group': 'МН-4-25-01'})
 
 
 def test_persistent_bulk_topic_draft_preview_publication_and_audit(service):
@@ -512,6 +563,7 @@ def test_persistent_bulk_topic_draft_preview_publication_and_audit(service):
     payload = {'action': 'add_topic_drafts',
                'titles': ['Черновик первой темы', 'Черновик второй темы'],
                'subject': 'Управление бизнес-процессами', 'deadline': '30.09.2026',
+               'startNumber': 40,
                'isCommon': False, 'isMulti': False, 'group': 'МН-4-25-01'}
     with pytest.raises(ActionError) as forbidden:
         service.perform(1, payload)
@@ -520,6 +572,7 @@ def test_persistent_bulk_topic_draft_preview_publication_and_audit(service):
     service.perform(ADMIN, payload)
     state = service.state(ADMIN)
     assert [item['title'] for item in state['topicDrafts']] == payload['titles']
+    assert [item['number'] for item in state['topicDrafts']] == [40, 41]
     assert not any(item['title'].startswith('Черновик') for item in service.catalog()['topics'])
 
     service.perform(ADMIN, {'action': 'publish_topic_drafts'})
@@ -527,6 +580,7 @@ def test_persistent_bulk_topic_draft_preview_publication_and_audit(service):
     published = [item for item in service.catalog(1, public=True)['topics']
                  if item['title'].startswith('Черновик')]
     assert len(published) == 2 and all(item['deadline'] == '30.09.2026' for item in published)
+    assert [item['number'] for item in published] == [40, 41]
     assert not any(item['title'].startswith('Черновик')
                    for item in service.catalog(2, public=True)['topics'])
     assert service.state(ADMIN)['auditLog'][0]['summary'] == 'Опубликовано тем: 2'
@@ -944,3 +998,4 @@ def test_resource_links_archives_and_report_deadline_reminder(service):
         service.perform(ADMIN, {'action': 'create_assignment', 'subject': subject,
                                 'description': 'Неверная ссылка.', 'deadline': '31.12.2099',
                                 'url': 'http://example.edu/file'})
+

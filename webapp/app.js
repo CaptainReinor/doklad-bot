@@ -466,15 +466,17 @@ function renderTopics() {
     });
 
     const myTopicIds = new Set(myBookings.map(item => item.id));
-    const visibleTopics = currentTopicSubject === "all" ? topicPool
+    const visibleTopics = (currentTopicSubject === "all" ? topicPool
         : currentTopicSubject === "mine" ? topicPool.filter(topic => myTopicIds.has(topic.id))
-            : topicPool.filter(topic => (topic.subject || "") === currentTopicSubject);
+            : topicPool.filter(topic => (topic.subject || "") === currentTopicSubject))
+        .sort((a, b) => (a.subject || "").localeCompare(b.subject || "", "ru") ||
+            a.number - b.number || a.id - b.id);
     container.innerHTML = visibleTopics.length ? visibleTopics.map(topic => {
         const {owners, mine, occupied, status} = topicBookingState(topic);
         const disabled = !connected || busy || topic.archived || (!mine && occupied);
         const scope = topic.isCommon ? "Общий для групп" : `Для ${topic.group}`;
         return `<article class="topic-card ${mine ? "booked" : ""} ${topic.archived ? "archived" : ""}">
-            <div class="topic-number">${topic.id}</div>
+            <div class="topic-number">${topic.number}</div>
             <div class="topic-title">${escapeHtml(topic.title)}</div>
             <div class="booking-owner" title="${escapeHtml(topic.subject || "Предмет не указан")}">📘 ${escapeHtml(shortSubject(topic.subject))}</div>
             <div class="booking-owner">Срок: ${escapeHtml(topic.deadline || "Не назначен")}</div>
@@ -651,6 +653,8 @@ function renderTopicEditor() {
             <input class="form-control" id="newTopicTitle" maxlength="200" placeholder="Введите название"></div>
             <div><label class="form-label" for="newTopicSubject">Предмет</label>
             <select class="form-control" id="newTopicSubject">${selectOptions("")}</select></div>
+            <div><label class="form-label" for="newTopicNumber">Номер по предмету, необязательно</label>
+            <input class="form-control" type="number" min="1" max="9999" id="newTopicNumber" placeholder="Назначится автоматически"></div>
             <div><label class="form-label" for="newTopicDeadline">Срок доклада, необязательно</label>
             <input class="form-control" type="date" id="newTopicDeadline"></div>
             <div class="wide"><label class="form-label" for="newTopicUrl">Ссылка, необязательно</label>
@@ -671,6 +675,8 @@ function renderTopicEditor() {
             <div class="admin-create-grid">
                 <div><label class="form-label" for="draftTopicSubject">Предмет</label>
                 <select class="form-control" id="draftTopicSubject">${selectOptions("")}</select></div>
+                <div><label class="form-label" for="draftTopicStartNumber">Начальный номер, необязательно</label>
+                <input class="form-control" type="number" min="1" max="9999" id="draftTopicStartNumber" placeholder="Назначатся автоматически"></div>
                 <div><label class="form-label" for="draftTopicDeadline">Срок, необязательно</label>
                 <input class="form-control" type="date" id="draftTopicDeadline"></div>
                 <div class="wide"><label class="form-label" for="draftTopicUrl">Ссылка для всех тем, необязательно</label>
@@ -684,7 +690,7 @@ function renderTopicEditor() {
             </div>
             <button class="btn btn-outline" onclick="addTopicDrafts()">Добавить список в черновик</button>
             ${adminTopicDrafts.length ? `<div class="draft-list">${adminTopicDrafts.map(item => `
-                <div class="draft-item"><div><strong>${escapeHtml(item.title)}</strong>
+                <div class="draft-item"><div><strong>${item.number ? `№${item.number} · ` : ""}${escapeHtml(item.title)}</strong>
                 <span>${escapeHtml(shortSubject(item.subject))} · ${escapeHtml(item.isCommon ? "Для всех" : item.group)}${item.deadline ? ` · ${escapeHtml(item.deadline)}` : ""}${item.url ? " · Есть ссылка" : ""}</span></div>
                 <button class="btn btn-danger btn-small" onclick="deleteTopicDraft(${item.id})">Убрать</button></div>`).join("")}</div>
                 <h4>Предварительный просмотр рассылки</h4>
@@ -695,11 +701,13 @@ function renderTopicEditor() {
                 </div>` : '<div class="empty-state compact">Черновик пуст. Он сохраняется после закрытия приложения.</div>'}
         </div>
         <div class="admin-records">${adminTopics.map(topic => `<article class="admin-record ${topic.archived ? "archived" : ""}">
-            <div class="admin-record-heading"><strong>№${topic.id}</strong><span>${topic.active ? (topic.archived ? "Архив по сроку" : "Активна") : "В архиве"}</span></div>
+            <div class="admin-record-heading"><strong>№${topic.number}</strong><span>${topic.active ? (topic.archived ? "Архив по сроку" : "Активна") : "В архиве"}</span></div>
             <label class="form-label" for="topic-title-${topic.id}">Название</label>
             <input class="form-control" id="topic-title-${topic.id}" maxlength="200" value="${escapeHtml(topic.title)}">
             <label class="form-label" for="topic-subject-${topic.id}">Предмет</label>
             <select class="form-control" id="topic-subject-${topic.id}">${selectOptions(topic.subject || "")}</select>
+            <label class="form-label" for="topic-number-${topic.id}">Номер по предмету</label>
+            <input class="form-control" type="number" min="1" max="9999" id="topic-number-${topic.id}" value="${topic.number}">
             <label class="form-label" for="topic-deadline-${topic.id}">Срок доклада</label>
             <input class="form-control" type="date" id="topic-deadline-${topic.id}" value="${dateInputValue(topic.deadline)}">
             <label class="form-label" for="topic-url-${topic.id}">Ссылка</label>
@@ -745,12 +753,14 @@ async function createTopic() {
     const title = document.getElementById("newTopicTitle").value.trim();
     const subject = document.getElementById("newTopicSubject").value.trim();
     const deadline = apiDate(document.getElementById("newTopicDeadline").value);
+    const rawNumber = document.getElementById("newTopicNumber").value;
     if (!title) { showStatus("Введите название темы."); return; }
     if (!subject) { showStatus("Укажите предмет."); return; }
     let url;
     try { url = await materialUrl("newTopicUrl", "newTopicFile"); }
     catch (error) { showStatus(error.message, 5000); return; }
     const payload = {action: "create_topic", title, subject, url, ...topicScopePayload("newTopic")};
+    if (rawNumber) payload.number = Number(rawNumber);
     if (deadline) payload.deadline = deadline;
     if (await performAction(payload)) renderTopicEditor();
 }
@@ -758,9 +768,10 @@ async function createTopic() {
 function topicDraftPreview() {
     const heading = adminTopicDrafts.length === 1 ? "📚 Добавлена новая тема доклада"
         : `📚 Добавлены новые темы докладов: ${adminTopicDrafts.length}`;
-    const rows = adminTopicDrafts.map((item, index) => {
+    const rows = adminTopicDrafts.map(item => {
         const scope = item.isCommon ? "Общий доклад" : `Группа: ${item.group}`;
-        return `${index + 1}. ${item.title}\nПредмет: ${item.subject}\n${scope}${item.deadline ? `\nСрок: ${item.deadline}` : ""}${item.url ? `\nМатериалы: ${item.url}` : ""}`;
+        const number = item.number ? `№${item.number}` : "№ назначится автоматически";
+        return `${number}. ${item.title}\nПредмет: ${item.subject}\n${scope}${item.deadline ? `\nСрок: ${item.deadline}` : ""}${item.url ? `\nМатериалы: ${item.url}` : ""}`;
     });
     return `${heading}\n\n${rows.join("\n\n")}`;
 }
@@ -770,6 +781,7 @@ async function addTopicDrafts() {
         .map(line => line.replace(/^\s*(?:\d+[.)]|[-–—•])\s*/, "").trim()).filter(Boolean);
     const subject = document.getElementById("draftTopicSubject").value.trim();
     const deadline = apiDate(document.getElementById("draftTopicDeadline").value);
+    const rawStartNumber = document.getElementById("draftTopicStartNumber").value;
     if (!titles.length) { showStatus("Добавьте названия тем построчно."); return; }
     if (titles.length > 50) { showStatus("За один раз можно добавить до 50 тем."); return; }
     if (!subject) { showStatus("Укажите предмет для списка тем."); return; }
@@ -777,6 +789,7 @@ async function addTopicDrafts() {
     try { url = await materialUrl("draftTopicUrl", "draftTopicFile"); }
     catch (error) { showStatus(error.message, 5000); return; }
     const payload = {action: "add_topic_drafts", titles, subject, url, ...topicScopePayload("draftTopic")};
+    if (rawStartNumber) payload.startNumber = Number(rawStartNumber);
     if (deadline) payload.deadline = deadline;
     if (await performAction(payload)) renderTopicEditor();
 }
@@ -800,11 +813,13 @@ async function saveTopic(topicId) {
     const title = document.getElementById(`topic-title-${topicId}`).value.trim();
     const subject = document.getElementById(`topic-subject-${topicId}`).value.trim();
     const deadline = apiDate(document.getElementById(`topic-deadline-${topicId}`).value);
+    const number = Number(document.getElementById(`topic-number-${topicId}`).value);
     if (!subject) { showStatus("Укажите предмет."); return; }
     let url;
     try { url = await materialUrl(`topic-url-${topicId}`, `topic-file-${topicId}`); }
     catch (error) { showStatus(error.message, 5000); return; }
-    const payload = {action: "update_topic", topicId, title, subject, url, ...topicScopePayload(String(topicId))};
+    const payload = {action: "update_topic", topicId, title, subject, number, url,
+        ...topicScopePayload(String(topicId))};
     if (deadline) payload.deadline = deadline;
     if (await performAction(payload)) renderTopicEditor();
 }
@@ -1627,3 +1642,4 @@ document.addEventListener("DOMContentLoaded", async () => {
             behavior: "smooth"
         });
     }
+

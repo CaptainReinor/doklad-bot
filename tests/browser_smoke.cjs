@@ -177,6 +177,7 @@ async function main() {
         assert.match(await homework.textContent(), /Подготовить схему бизнес-процесса/);
         assert.match(await homework.textContent(), /30\.09\.2026/);
         assert.match(await homework.textContent(), /Осталось \d+ (день|дня|дней)/);
+        assert.equal(await homework.locator('.topic-number').count(), 0);
         const homeworkPreviewUrl = await homework.getByRole('link', {name:'🔗 Открыть материалы'}).getAttribute('href');
         assert.match(homeworkPreviewUrl, /\/viewer\.html\?file=/);
         const homeworkDownload = homework.getByRole('link', {name:'⬇️ Скачать файл'});
@@ -211,11 +212,13 @@ async function main() {
         await admin.getByRole('button', {name:'📚 Управление темами'}).click();
         await admin.locator('#draftTopicTitles').fill('1. Массовая тема А\n2. Массовая тема Б');
         await admin.locator('#draftTopicSubject').selectOption({label:'Бизнес-процессы'});
+        await admin.locator('#draftTopicStartNumber').fill('40');
         await admin.locator('#draftTopicDeadline').fill('2026-10-10');
         await admin.locator('#draftTopicGroup').selectOption('МН-4-25-02');
         await admin.getByRole('button', {name:'Добавить список в черновик'}).click();
         await admin.locator('.draft-item').first().waitFor();
         assert.equal(await admin.locator('.draft-item').count(), 2);
+        assert.match(await admin.locator('.draft-item').first().textContent(), /№40/);
         assert.match(await admin.locator('.notification-preview').textContent(), /Добавлены новые темы докладов: 2/);
         assert.match(await admin.locator('.notification-preview').textContent(), /Массовая тема А/);
         admin.once('dialog', dialog => dialog.accept());
@@ -225,18 +228,25 @@ async function main() {
         checks.push('Bulk topic draft persists, previews one notification, and publishes in one action');
         await admin.locator('#newTopicTitle').fill('Тестовая тема администратора');
         await admin.locator('#newTopicSubject').selectOption({label:'Бизнес-процессы'});
+        await admin.locator('#newTopicNumber').fill('70');
         await admin.locator('#newTopicDeadline').fill('2026-10-15');
         await admin.locator('#newTopicUrl').fill('https://example.edu/reports/current');
         await admin.locator('#newTopicGroup').selectOption('МН-4-25-02');
         await admin.locator('#newTopicMulti').check();
         await admin.getByRole('button', {name:'Добавить тему'}).click();
         await admin.locator('input[value="Тестовая тема администратора"]').waitFor();
+        const createdTopicRecord = admin.locator('.admin-record').filter({has:
+            admin.locator('input[value="Тестовая тема администратора"]')});
+        await createdTopicRecord.locator('input[id^="topic-number-"]').fill('71');
+        await createdTopicRecord.getByRole('button', {name:'Сохранить'}).click();
+        await admin.waitForFunction(() => !busy);
         await b.evaluate(() => refreshState());
         await b.evaluate(() => switchTab('reports'));
         const createdTopic = b.locator('#topicsContainer .topic-card').filter({hasText:'Тестовая тема администратора'});
         assert.equal(await createdTopic.count(), 1);
         assert.match(await createdTopic.textContent(), /Бизнес-процессы/);
         assert.match(await createdTopic.textContent(), /15\.10\.2026/);
+        assert.equal((await createdTopic.locator('.topic-number').textContent()).trim(), '71');
         assert.match(await createdTopic.textContent(), /Несколько выступающих/);
         assert.equal(await createdTopic.getByRole('link', {name:'🔗 Открыть материалы'}).getAttribute('href'), 'https://example.edu/reports/current');
         await b.getByRole('button', {name:'Бизнес-процессы', exact:true}).click();
@@ -427,3 +437,4 @@ async function main() {
     } finally { await browser.close(); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
+

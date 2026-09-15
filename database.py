@@ -99,6 +99,7 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL COLLATE NOCASE UNIQUE,
                 subject TEXT NOT NULL DEFAULT '',
+                display_number INTEGER NOT NULL DEFAULT 0,
                 is_common INTEGER NOT NULL DEFAULT 0,
                 is_multi INTEGER NOT NULL DEFAULT 0,
                 group_name TEXT NOT NULL DEFAULT 'МН-4-25-01',
@@ -110,6 +111,8 @@ class Database:
             if 'subject' not in {r['name'] for r in conn.execute('PRAGMA table_info(topics)')}:
                 conn.execute("ALTER TABLE topics ADD COLUMN subject TEXT NOT NULL DEFAULT ''")
             topic_columns = {r['name'] for r in conn.execute('PRAGMA table_info(topics)')}
+            if 'display_number' not in topic_columns:
+                conn.execute("ALTER TABLE topics ADD COLUMN display_number INTEGER NOT NULL DEFAULT 0")
             if 'is_common' not in topic_columns:
                 conn.execute("ALTER TABLE topics ADD COLUMN is_common INTEGER NOT NULL DEFAULT 0")
             if 'is_multi' not in topic_columns:
@@ -120,9 +123,11 @@ class Database:
                 conn.execute("ALTER TABLE topics ADD COLUMN url TEXT NOT NULL DEFAULT ''")
             now = timestamp()
             conn.executemany('''INSERT OR IGNORE INTO topics
-                (id, title, subject, is_common, is_multi, group_name, active, deleted, created_at, updated_at)
-                VALUES (?, ?, ?, 0, 0, ?, 1, 0, ?, ?)''',
+                (id, title, subject, display_number, is_common, is_multi, group_name,
+                 active, deleted, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 0, 0, ?, 1, 0, ?, ?)''',
                 [(topic['id'], topic['title'], topic.get('subject', ''),
+                  topic.get('number', topic['id']),
                   topic.get('group', 'МН-4-25-01'), now, now)
                  for topic in load_catalog()['topics']])
             conn.executemany('''UPDATE topics SET subject=?, updated_at=?
@@ -182,6 +187,7 @@ class Database:
                 admin_id INTEGER NOT NULL,
                 title TEXT NOT NULL COLLATE NOCASE,
                 subject TEXT NOT NULL,
+                display_number INTEGER NOT NULL DEFAULT 0,
                 deadline TEXT NOT NULL DEFAULT '',
                 is_common INTEGER NOT NULL DEFAULT 0,
                 is_multi INTEGER NOT NULL DEFAULT 0,
@@ -192,6 +198,8 @@ class Database:
                 UNIQUE(admin_id, title))''')
             if 'url' not in {r['name'] for r in conn.execute('PRAGMA table_info(topic_drafts)')}:
                 conn.execute("ALTER TABLE topic_drafts ADD COLUMN url TEXT NOT NULL DEFAULT ''")
+            if 'display_number' not in {r['name'] for r in conn.execute('PRAGMA table_info(topic_drafts)')}:
+                conn.execute("ALTER TABLE topic_drafts ADD COLUMN display_number INTEGER NOT NULL DEFAULT 0")
             conn.execute('''CREATE TABLE IF NOT EXISTS audit_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 actor_id INTEGER NOT NULL,
@@ -270,7 +278,19 @@ class Database:
                                  (lesson['date'], lesson['day'], lesson['time'], lesson['type'],
                                   lesson['subject'], lesson['teacher'], lesson['room'],
                                   lesson['group'], lesson.get('url', ''), now, now))
-            conn.execute('PRAGMA user_version=14')
+            if schema_version < 15:
+                # Visible topic numbers are scoped to a subject. Technical SQLite IDs
+                # may contain gaps after deletion and must never be shown to students.
+                counters = {}
+                for row in conn.execute('''SELECT id, subject FROM topics
+                    WHERE deleted=0 ORDER BY subject COLLATE NOCASE, id'''):
+                    number = counters.get(row['subject'], 0) + 1
+                    counters[row['subject']] = number
+                    conn.execute('UPDATE topics SET display_number=? WHERE id=?',
+                                 (number, row['id']))
+            conn.execute('''CREATE UNIQUE INDEX IF NOT EXISTS idx_topics_subject_number
+                ON topics(subject, display_number) WHERE deleted=0''')
+            conn.execute('PRAGMA user_version=15')
 
     @staticmethod
     def _user(conn, user_id):
@@ -402,7 +422,8 @@ class Database:
     def get_topics(self, *, include_inactive=False):
         condition = 'deleted=0' if include_inactive else 'deleted=0 AND active=1'
         with self.connection() as conn:
-            rows = conn.execute(f'SELECT * FROM topics WHERE {condition} ORDER BY id').fetchall()
+            rows = conn.execute(f'''SELECT * FROM topics WHERE {condition}
+                ORDER BY subject COLLATE NOCASE, display_number, id''').fetchall()
             result = []
             for row in rows:
                 item = dict(row)
@@ -413,15 +434,46 @@ class Database:
                 result.append(item)
             return result
 
-    def create_topic(self, title, subject, is_common, is_multi, group_name, url=''):
+    @staticmethod
+    def _next_topic_number(conn, subject, exclude_topic_id=None):
+        query = '''SELECT display_number FROM topics
+            WHERE subject=? AND deleted=0 AND display_number>0'''
+        params = [subject]
+        if exclude_topic_id is not None:
+            query += ' AND id<>?'
+            params.append(exclude_topic_id)
+        used = {row['display_number'] for row in conn.execute(query, params)}
+        number = 1
+        while number in used:
+            number += 1
+        return number
+
+    @classmethod
+    def _topic_number(cls, conn, subject, display_number=None, exclude_topic_id=None):
+        if display_number in (None, 0):
+            return cls._next_topic_number(conn, subject, exclude_topic_id)
+        if type(display_number) is not int or not 1 <= display_number <= 9999:
+            raise ValueError('Номер темы должен быть целым числом от 1 до 9999.')
+        duplicate = conn.execute('''SELECT id FROM topics
+            WHERE subject=? AND display_number=? AND deleted=0 AND id<>COALESCE(?, -1)''',
+                                 (subject, display_number, exclude_topic_id)).fetchone()
+        if duplicate:
+            raise ValueError('У этого предмета уже есть тема с таким номером.')
+        return display_number
+
+    def create_topic(self, title, subject, is_common, is_multi, group_name, url='',
+                     display_number=None):
         try:
             with self.connection() as conn:
+                conn.execute('BEGIN IMMEDIATE')
                 now = timestamp()
+                display_number = self._topic_number(conn, subject, display_number)
                 cursor = conn.execute('''INSERT INTO topics
-                    (title, subject, is_common, is_multi, group_name, url, active, deleted,
-                     created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?)''',
-                                      (title, subject, int(is_common), int(is_multi), group_name,
-                                       url, now, now))
+                    (title, subject, display_number, is_common, is_multi, group_name, url,
+                     active, deleted, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)''',
+                                      (title, subject, display_number, int(is_common),
+                                       int(is_multi), group_name, url, now, now))
                 topic = self._topic(conn, cursor.lastrowid)
                 scope = 'Общий доклад' if is_common else f'Группа: {group_name}'
                 deliver_after = time.time() + TOPIC_NOTIFICATION_BATCH_DELAY
@@ -466,9 +518,11 @@ class Database:
                     raise ValueError('В списке есть повтор или тема, которая уже существует.')
                 now = timestamp()
                 conn.executemany('''INSERT INTO topic_drafts
-                    (admin_id, title, subject, deadline, is_common, is_multi, group_name, url,
-                     created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', [
-                    (admin_id, item['title'], item['subject'], item.get('deadline', ''),
+                    (admin_id, title, subject, display_number, deadline, is_common, is_multi,
+                     group_name, url, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', [
+                    (admin_id, item['title'], item['subject'], item.get('display_number', 0),
+                     item.get('deadline', ''),
                      int(item['is_common']), int(item['is_multi']), item['group_name'],
                      item.get('url', ''), now, now)
                     for item in drafts
@@ -505,11 +559,14 @@ class Database:
                              (deliver_after,))
                 topics = []
                 for draft in drafts:
+                    display_number = self._topic_number(
+                        conn, draft['subject'], draft['display_number'] or None)
                     cursor = conn.execute('''INSERT INTO topics
-                        (title, subject, is_common, is_multi, group_name, url, active, deleted,
-                         created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?)''',
-                        (draft['title'], draft['subject'], draft['is_common'], draft['is_multi'],
-                         draft['group_name'], draft['url'], now, now))
+                        (title, subject, display_number, is_common, is_multi, group_name, url,
+                         active, deleted, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)''',
+                        (draft['title'], draft['subject'], display_number, draft['is_common'],
+                         draft['is_multi'], draft['group_name'], draft['url'], now, now))
                     topic = self._topic(conn, cursor.lastrowid)
                     if draft['deadline']:
                         conn.execute('''INSERT INTO deadlines (kind, item_id, deadline)
@@ -547,14 +604,25 @@ class Database:
                 FROM audit_log a LEFT JOIN users u ON u.user_id=a.actor_id
                 ORDER BY a.id DESC LIMIT ?''', (limit,))]
 
-    def update_topic(self, topic_id, title, subject, is_common, is_multi, group_name, url=''):
+    def update_topic(self, topic_id, title, subject, is_common, is_multi, group_name, url='',
+                     display_number=None):
         try:
             with self.connection() as conn:
                 conn.execute('BEGIN IMMEDIATE')
                 topic = self._topic(conn, topic_id)
                 if not topic:
                     raise ValueError('Тема не найдена.')
+                if display_number is None and subject == topic['subject']:
+                    display_number = topic['display_number']
+                elif display_number is None:
+                    same_number = conn.execute('''SELECT id FROM topics
+                        WHERE subject=? AND display_number=? AND deleted=0 AND id<>?''',
+                                               (subject, topic['display_number'], topic_id)).fetchone()
+                    display_number = (None if same_number else topic['display_number'])
+                display_number = self._topic_number(
+                    conn, subject, display_number, exclude_topic_id=topic_id)
                 if (topic['title'] == title and topic['subject'] == subject and
+                        topic['display_number'] == display_number and
                         topic['is_common'] == is_common and topic['is_multi'] == is_multi and
                         topic['group_name'] == group_name and topic['url'] == url):
                     return topic
@@ -568,10 +636,10 @@ class Database:
                     raise TopicInUse('Сначала снимите брони студентов из другой группы.')
                 if not is_multi and len(bookings) > 1:
                     raise TopicInUse('Сначала оставьте только одного выступающего.')
-                conn.execute('''UPDATE topics SET title=?, subject=?, is_common=?, is_multi=?,
-                    group_name=?, url=?, updated_at=? WHERE id=?''',
-                             (title, subject, int(is_common), int(is_multi), group_name,
-                              url, timestamp(), topic_id))
+                conn.execute('''UPDATE topics SET title=?, subject=?, display_number=?,
+                    is_common=?, is_multi=?, group_name=?, url=?, updated_at=? WHERE id=?''',
+                             (title, subject, display_number, int(is_common), int(is_multi),
+                              group_name, url, timestamp(), topic_id))
                 if topic['title'] != title:
                     conn.execute('UPDATE bookings SET topic=? WHERE topic=?', (title, topic['title']))
                 return self._topic(conn, topic_id)
@@ -1029,3 +1097,4 @@ class Database:
 if __name__ == '__main__':
     Database().init()
     print('База данных готова к работе.')
+

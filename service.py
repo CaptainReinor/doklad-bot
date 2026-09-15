@@ -165,6 +165,14 @@ class Service:
         group_name = '' if is_common else clean_group(data.get('group', ALLOWED_GROUPS[0]))
         return is_common, is_multi, group_name
 
+    @staticmethod
+    def _optional_topic_number(value):
+        if value in (None, ''):
+            return None
+        if type(value) is not int or not 1 <= value <= 9999:
+            raise ActionError('Номер темы должен быть целым числом от 1 до 9999.')
+        return value
+
     def topics(self, *, include_inactive=False):
         deadlines = {(row['kind'], row['item_id']): row['deadline'] for row in self.db.get_deadlines()}
         default_deadlines = {item['id']: item.get('deadline') for item in load_catalog()['topics']}
@@ -172,7 +180,8 @@ class Service:
         for row in self.db.get_topics(include_inactive=include_inactive):
             deadline = deadlines.get(('topics', row['id']), default_deadlines.get(row['id']))
             archived = not row['active'] or self._deadline_is_past(deadline)
-            result.append({'id': row['id'], 'title': row['title'], 'subject': row['subject'],
+            result.append({'id': row['id'], 'number': row['display_number'],
+                           'title': row['title'], 'subject': row['subject'],
                            'active': row['active'], 'archived': archived,
                            'isCommon': row['is_common'], 'isMulti': row['is_multi'],
                            'group': row['group_name'], 'deadline': deadline,
@@ -321,6 +330,7 @@ class Service:
             result['adminStats'] = self.db.get_admin_stats()
             result['topicDrafts'] = [{
                 'id': row['id'], 'title': row['title'], 'subject': row['subject'],
+                'number': row['display_number'],
                 'deadline': row['deadline'], 'isCommon': row['is_common'],
                 'isMulti': row['is_multi'], 'group': row['group_name'], 'url': row['url']
             } for row in self.db.get_topic_drafts(user_id)]
@@ -470,13 +480,17 @@ class Service:
                         raise ActionError('Удалите повторяющиеся темы из списка.')
                     subject = self._topic_subject(data.get('subject'))
                     is_common, is_multi, group_name = self._topic_scope(data)
+                    start_number = self._optional_topic_number(data.get('startNumber'))
+                    if start_number is not None and start_number + len(titles) - 1 > 9999:
+                        raise ActionError('Номера тем должны быть от 1 до 9999.')
                     deadline = self._valid_deadline(data['deadline']) if data.get('deadline') else ''
                     url = self._optional_url(data.get('url', ''))
                     self.db.add_topic_drafts(user_id, [{
                         'title': title, 'subject': subject, 'deadline': deadline,
+                        'display_number': start_number + index if start_number is not None else 0,
                         'is_common': is_common, 'is_multi': is_multi, 'group_name': group_name,
                         'url': url
-                    } for title in titles])
+                    } for index, title in enumerate(titles)])
                     return f'В черновик добавлено тем: {len(titles)}.'
                 if action == 'delete_topic_draft':
                     draft_id = data.get('draftId')
@@ -498,9 +512,11 @@ class Service:
                     title = clean_text(data.get('title'), 'название темы', 3, 200)
                     subject = self._topic_subject(data.get('subject'))
                     is_common, is_multi, group_name = self._topic_scope(data)
+                    display_number = self._optional_topic_number(data.get('number'))
                     deadline = self._valid_deadline(data['deadline']) if data.get('deadline') else None
                     url = self._optional_url(data.get('url', ''))
-                    topic = self.db.create_topic(title, subject, is_common, is_multi, group_name, url)
+                    topic = self.db.create_topic(title, subject, is_common, is_multi, group_name,
+                                                 url, display_number)
                     if deadline:
                         self.db.set_deadline('topics', topic['id'], deadline)
                     self.db.log_audit(user_id, 'create', 'topic', topic['id'],
@@ -514,17 +530,19 @@ class Service:
                     title = clean_text(data.get('title'), 'название темы', 3, 200)
                     subject = self._topic_subject(data.get('subject'))
                     is_common, is_multi, group_name = self._topic_scope(data)
+                    display_number = self._optional_topic_number(data.get('number'))
                     deadline = self._valid_deadline(data['deadline']) if data.get('deadline') else None
                     url = self._optional_url(data.get('url', ''))
                     changed = any((existing_topic['title'] != title,
                                    existing_topic['subject'] != subject,
+                                   existing_topic['number'] != (display_number or existing_topic['number']),
                                    existing_topic['isCommon'] != is_common,
                                    existing_topic['isMulti'] != is_multi,
                                    existing_topic['group'] != group_name,
                                    existing_topic.get('url', '') != url,
                                    bool(deadline) and existing_topic.get('deadline') != deadline))
                     topic = self.db.update_topic(item_id, title, subject, is_common, is_multi,
-                                                 group_name, url)
+                                                 group_name, url, display_number)
                     if deadline and existing_topic.get('deadline') != deadline:
                         self.db.set_deadline('topics', item_id, deadline)
                     if changed:
@@ -607,3 +625,4 @@ class Service:
             if isinstance(exc, ActionError):
                 raise
             raise ActionError(str(exc)) from exc
+
