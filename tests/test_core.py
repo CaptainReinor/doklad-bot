@@ -848,7 +848,7 @@ def test_admin_uploads_material_and_students_can_download_it(client, service, he
     created = client.post('/api/action', json={
         'action': 'create_assignment', 'subject': 'Управление бизнес-процессами',
         'description': 'Домашка с удаляемым файлом', 'deadline': '01.01.2099',
-        'url': response.json['path'],
+        'url': 'http://localhost' + response.json['path'],
     }, headers=headers(ADMIN))
     assert created.status_code == 200
     assignment = next(item for item in created.json['catalog']['assignments']
