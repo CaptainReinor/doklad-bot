@@ -324,12 +324,14 @@ async function main() {
         await queueTopic.getByRole('button', {name:'Выбрать тему'}).click();
         await b.evaluate(() => switchTab('today'));
         await b.locator('#today .queue-card').filter({hasText:'Бизнес-процессы'}).waitFor();
+        assert.equal(await b.locator('#today .today-deadline').filter({hasText:'Доклад для очереди сегодня'}).count(), 1);
+        assert.equal(await b.locator('#today .nearby-item').filter({hasText:'Доклад для очереди сегодня'}).count(), 0);
         assert.equal(await b.locator('#today .queue-slot').count(), 1);
         await b.locator('#today .queue-slot.empty').click();
         await b.locator('#today .queue-slot.mine').waitFor();
         assert.match(await b.locator('#today .queue-slot.mine').textContent(), /Доклад для очереди сегодня/);
         await b.screenshot({path:path.join(artifacts, 'today-hub-mobile.png'), fullPage:true});
-        checks.push('A presentation queue appears automatically for today and lets an owner choose a slot');
+        checks.push('Today shows due reports once and the presentation queue lets an owner choose a slot');
         await admin.screenshot({path:path.join(artifacts, 'admin-tools-desktop.png'), fullPage:true});
 
         const newcomer = await pageFor(104);

@@ -294,7 +294,7 @@ function nearestEvents() {
     });
     assignmentsData.filter(item => !item.archived).forEach(item => {
         const when = calendarTime(item.deadline, "23.59");
-        if (when >= start && when <= end) events.push({
+        if (calendarTime(item.deadline) > start && when <= end) events.push({
             kind: "Домашка", icon: "📝", title: item.subject,
             dateLabel: item.deadline, details: item.description, when, url: item.url || ""
         });
@@ -302,7 +302,7 @@ function nearestEvents() {
     const myTopicIds = new Set(myBookings.map(item => item.id));
     topicsData.filter(item => myTopicIds.has(item.id) && !item.archived && item.deadline).forEach(item => {
         const when = calendarTime(item.deadline, "23.59");
-        if (when >= start && when <= end) events.push({
+        if (calendarTime(item.deadline) > start && when <= end) events.push({
             kind: "Доклад", icon: "📚", title: item.title,
             dateLabel: item.deadline, details: shortSubject(item.subject), when, url: item.url || ""
         });
@@ -310,22 +310,45 @@ function nearestEvents() {
     return events.sort((a, b) => a.when - b.when || a.kind.localeCompare(b.kind, "ru")).slice(0, 3);
 }
 
+function todayDeadlineEvents() {
+    const today = studyToday();
+    const events = assignmentsData
+        .filter(item => !item.archived && item.deadline === today)
+        .map(item => ({
+            kind: "Домашка", icon: "📝", title: item.subject,
+            details: item.description, url: item.url || ""
+        }));
+    const myTopicIds = new Set(myBookings.map(item => item.id));
+    topicsData
+        .filter(item => myTopicIds.has(item.id) && !item.archived && item.deadline === today)
+        .forEach(item => events.push({
+            kind: "Доклад", icon: "📚", title: item.title,
+            details: shortSubject(item.subject), url: item.url || ""
+        }));
+    return events.sort((a, b) => a.kind.localeCompare(b.kind, "ru") || a.title.localeCompare(b.title, "ru"));
+}
+
 function renderToday() {
     const container = document.getElementById("todayContent");
     if (!container) return;
     const today = studyToday();
     const lessons = scheduleData.filter(item => item.date === today).sort((a, b) => lessonStart(a) - lessonStart(b));
+    const deadlines = todayDeadlineEvents();
     const announcements = announcementsData.slice(0, 3);
     const nearest = nearestEvents();
     const announcementSection = announcements.length ? `<section class="hub-section">
         <h3>📣 Объявления</h3><div class="hub-list">${announcements.map(item => `<article class="hub-card announcement-card">
             <strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.body)}</p>
             ${resourceButton(item.url, "Открыть")}</article>`).join("")}</div></section>` : "";
-    const lessonSection = lessons.length ? `<section class="hub-section"><h3>📅 Сегодня</h3>
+    const lessonSection = lessons.length || deadlines.length ? `<section class="hub-section"><h3>📅 Сегодня</h3>
         <div class="hub-list">${lessons.map(item => `<article class="hub-card today-lesson">
             <div class="hub-card-top"><strong>${escapeHtml(item.subject)}</strong><span>${escapeHtml(item.time)}</span></div>
             <p>${escapeHtml([item.teacher, item.room].filter(Boolean).join(" · ") || "Детали не указаны")}</p>
-            ${resourceButton(item.url, "Подключиться к паре")}</article>`).join("")}</div></section>` : "";
+            ${resourceButton(item.url, "Подключиться к паре")}</article>`).join("")}
+            ${deadlines.map(item => `<article class="hub-card today-deadline">
+                <div class="hub-card-top"><strong>${item.icon} ${escapeHtml(item.kind)}</strong><span>Срок сегодня</span></div>
+                <h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.details)}</p>
+                ${resourceButton(item.url, "🔗 Открыть материалы")}</article>`).join("")}</div></section>` : "";
     const queueSection = presentationQueues.length ? `<section class="hub-section"><h3>🎤 Очередь выступлений</h3>
         <div class="hub-list">${presentationQueues.map((queue, queueIndex) => renderPresentationQueue(queue, queueIndex)).join("")}</div></section>` : "";
     const nearestSection = `<section class="hub-section"><h3>⏳ Ближайшее</h3>
