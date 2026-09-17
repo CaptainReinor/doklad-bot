@@ -11,7 +11,7 @@ from conftest import ADMIN, TEST_TOKEN, register, signed_data
 from auth import validate_init_data
 from catalog import load_catalog
 from database import Database
-from notifications import check_notifications, is_deadline_tomorrow
+from notifications import check_notifications, is_deadline_tomorrow, notification_html
 from service import ENGLISH_SUBJECT, ActionError, Service, clean_group
 from storage import cleanup_uploads
 
@@ -29,6 +29,21 @@ def test_catalog_schedule_only_splits_professional_english():
     assert all(item['room'] == 'СДО РАНХиГС' for item in schedule)
     assert not any(item['subject'] == 'Научно-исследовательская работа (П)'
                    or item['subject'].startswith('Практика по профилю') for item in schedule)
+
+
+def test_notification_links_are_short_and_html_safe():
+    message = ('📝 Домашка <важная> & срочная\n'
+               '🔗 Материалы: https://example.edu/files/a.pdf?name=Большой%20файл&download=1\n'
+               'Ссылка: https://example.edu/lesson\n'
+               '🔗 Подробнее: https://example.edu/news')
+
+    rendered = notification_html(message)
+
+    assert 'Домашка &lt;важная&gt; &amp; срочная' in rendered
+    assert '>Открыть материалы</a>' in rendered
+    assert '>Подключиться к паре</a>' in rendered
+    assert '>Подробнее</a>' in rendered
+    assert 'name=Большой%20файл&amp;download=1' in rendered
 
 
 def test_public_schedule_filters_only_english_by_registered_group(service):

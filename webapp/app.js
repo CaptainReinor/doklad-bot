@@ -1168,6 +1168,8 @@ function renderHomeworkEditor() {
             <input class="form-control file-control" type="file" id="newAssignmentFile" accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.ods,.txt,.png,.jpg,.jpeg,.zip"></div>
         </div>
         <button class="btn btn-primary" onclick="createAssignment()">Добавить задание</button>
+        <h4>Предварительный просмотр уведомления</h4>
+        <pre class="notification-preview" id="homeworkNotificationPreview"></pre>
         </div>
         <div class="admin-records">${visibleAssignments.length ? visibleAssignments.map(item => `<details class="admin-record ${item.archived ? "archived" : ""}">
             <summary>${escapeHtml(item.deadline)} · ${escapeHtml(shortSubject(item.subject))}${item.archived ? " · Архив" : ""}</summary>
@@ -1186,10 +1188,29 @@ function renderHomeworkEditor() {
                 <button class="btn btn-danger" onclick="deleteAssignment(${item.id})">${item.archived ? "Удалить из архива" : "Удалить"}</button>
             </div></details>`).join("") : `<div class="empty-state">${currentAdminHomeworkView === "archive" ? "Архив домашки пуст." : "Актуальных домашних заданий пока нет."}</div>`}</div>
         <button class="btn btn-secondary" onclick="closeHomeworkEditor()">К управлению</button></div>`;
+    ["newAssignmentSubject", "newAssignmentDescription", "newAssignmentDeadline",
+        "newAssignmentUrl", "newAssignmentFile"].forEach(id => {
+        const input = document.getElementById(id);
+        input?.addEventListener(input?.type === "file" || input?.tagName === "SELECT" ? "change" : "input",
+            renderHomeworkNotificationPreview);
+    });
+    renderHomeworkNotificationPreview();
 }
 
 function openHomeworkEditor() { currentAdminHomeworkView = "active"; renderHomeworkEditor(); }
 function setAdminHomeworkView(view) { currentAdminHomeworkView = view === "archive" ? "archive" : "active"; renderHomeworkEditor(); }
+
+function renderHomeworkNotificationPreview() {
+    const preview = document.getElementById("homeworkNotificationPreview");
+    if (!preview) return;
+    const subject = document.getElementById("newAssignmentSubject")?.value || "Предмет";
+    const description = document.getElementById("newAssignmentDescription")?.value.trim() || "Описание задания";
+    const deadline = apiDate(document.getElementById("newAssignmentDeadline")?.value) || "Дата срока";
+    const hasMaterial = Boolean(document.getElementById("newAssignmentUrl")?.value.trim() ||
+        document.getElementById("newAssignmentFile")?.files?.length);
+    preview.textContent = `📝 Добавлено домашнее задание\n${subject}\n${description}\n📅 Срок: ${deadline}${
+        hasMaterial ? "\n🔗 Открыть материалы" : ""}`;
+}
 
 function renderAuditLog() {
     if (!isAdmin) return;

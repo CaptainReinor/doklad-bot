@@ -1,5 +1,6 @@
 """Persistent notifications; calendar dates are evaluated in the study timezone."""
 import hashlib
+import html
 import json
 import logging
 import math
@@ -13,6 +14,28 @@ from storage import cleanup_uploads
 
 logger = logging.getLogger(__name__)
 DEADLINE_REMINDER_HOUR = 9
+URL_LINE_RE = re.compile(r'^(?P<prefix>.*?)(?P<url>https?://\S+)$')
+
+
+def notification_html(message):
+    """Hide technical URLs behind short Telegram HTML links."""
+    lines = []
+    for line in message.splitlines():
+        match = URL_LINE_RE.match(line)
+        if not match:
+            lines.append(html.escape(line))
+            continue
+        prefix, url = match.group('prefix'), match.group('url')
+        if 'Материалы:' in prefix:
+            label, replacement = 'Открыть материалы', '🔗 '
+        elif 'Подробнее:' in prefix:
+            label, replacement = 'Подробнее', '🔗 '
+        elif 'Ссылка:' in prefix:
+            label, replacement = 'Подключиться к паре', '🔗 '
+        else:
+            label, replacement = 'Открыть ссылку', prefix
+        lines.append(f'{html.escape(replacement)}<a href="{html.escape(url, quote=True)}">{label}</a>')
+    return '\n'.join(lines)
 
 
 def is_deadline_tomorrow(deadline_str, current_date):
@@ -197,10 +220,14 @@ def check_notifications(service, send_message, *, now=None):
 def start_notification_thread(service, send_message, stop_event=None):
     stop_event = stop_event or threading.Event()
 
+    def deliver(user_id, message):
+        send_message(user_id, notification_html(message), parse_mode='HTML',
+                     disable_web_page_preview=True)
+
     def run():
         while not stop_event.is_set():
             try:
-                check_notifications(service, send_message)
+                check_notifications(service, deliver)
             except Exception as exc:
                 logger.error('Notification cycle failed: %s', type(exc).__name__)
             stop_event.wait(NOTIFICATION_INTERVAL)
