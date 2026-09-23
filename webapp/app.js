@@ -3,7 +3,8 @@
 const tg = window.Telegram?.WebApp || null;
 const apiBase = (window.APP_CONFIG?.apiBaseUrl || window.location.origin).replace(/\/$/, "");
 let scheduleData = [], topicsData = [], assignmentsData = [], announcementsData = [];
-let presentationQueues = [];
+let presentationQueues = [], studentPresentations = [];
+const openStudentPresentationQueues = new Set();
 let bookings = [], myBookings = [], notificationSettings = {};
 let adminTopics = [], adminLessons = [], adminAssignments = [], adminAnnouncements = [];
 let adminTopicDrafts = [], adminAuditLog = [], adminStats = null;
@@ -31,6 +32,14 @@ function shortSubject(value) {
     return SUBJECT_SHORT_NAMES[value] || (value.length > 38 ? value.slice(0, 35) + "…" : value);
 }
 
+function participantCountLabel(count) {
+    const lastTwo = count % 100;
+    const last = count % 10;
+    const word = lastTwo >= 11 && lastTwo <= 14 ? "участников"
+        : last === 1 ? "участник" : last >= 2 && last <= 4 ? "участника" : "участников";
+    return `${count} ${word}`;
+}
+
 function safeHttpsUrl(value) {
     if (typeof value !== "string" || !value.trim()) return "";
     try {
@@ -40,7 +49,7 @@ function safeHttpsUrl(value) {
     } catch { return ""; }
 }
 
-function resourceButton(value, label = "🔗 Открыть материалы") {
+function resourceButton(value, label = "Открыть материалы") {
     const url = safeHttpsUrl(value);
     if (!url) return "";
     const parsed = new URL(url);
@@ -54,7 +63,7 @@ function resourceButton(value, label = "🔗 Открыть материалы")
             <a class="btn btn-outline resource-link" href="${escapeHtml(viewerUrl.href)}">${escapeHtml(label)}</a>
             <a class="btn btn-secondary resource-download" href="${escapeHtml(downloadUrl.href)}"
                 download="${escapeHtml(fileName)}" data-file-name="${escapeHtml(fileName)}"
-                onclick="return downloadResource(event, this)">⬇️ Скачать файл</a></div>`;
+                onclick="return downloadResource(event, this)">Скачать файл</a></div>`;
     }
     return `<a class="btn btn-outline resource-link" href="${escapeHtml(url)}"
         onclick="return openExternalResource(event, this)">${escapeHtml(label)}</a>`;
@@ -159,7 +168,7 @@ function deadlineCountdown(value) {
 function deadlineCountdownMarkup(value) {
     const countdown = deadlineCountdown(value);
     return countdown
-        ? `<div class="deadline-countdown ${countdown.className}">⏳ ${escapeHtml(countdown.text)}</div>`
+        ? `<div class="deadline-countdown ${countdown.className}">${escapeHtml(countdown.text)}</div>`
         : "";
 }
 
@@ -222,6 +231,7 @@ function applyState(data) {
     bookings = data.bookings;
     myBookings = bookings.filter(item => item.isMine);
     announcementsData = Array.isArray(data.announcements) ? data.announcements : [];
+    studentPresentations = Array.isArray(data.studentPresentations) ? data.studentPresentations : [];
     presentationQueues = Array.isArray(data.presentationQueues) ? data.presentationQueues : [];
     notificationSettings = data.notifications || {};
     connected = true;
@@ -329,7 +339,7 @@ function nearestEvents() {
     scheduleData.forEach(lesson => {
         const when = lessonStart(lesson);
         if (calendarTime(lesson.date) > start && when <= end) events.push({
-            kind: "Пара", icon: "📅", title: lesson.subject,
+            kind: "Пара", title: lesson.subject, lessonId: lesson.id,
             dateLabel: lesson.date, details: `${lesson.time}${lesson.teacher ? ` · ${lesson.teacher}` : ""}`,
             when, url: lesson.url || ""
         });
@@ -337,7 +347,7 @@ function nearestEvents() {
     assignmentsData.filter(item => !item.archived).forEach(item => {
         const when = calendarTime(item.deadline, "23.59");
         if (calendarTime(item.deadline) > start && when <= end) events.push({
-            kind: "Домашка", icon: "📝", title: item.subject,
+            kind: "Домашка", title: item.subject,
             dateLabel: item.deadline, details: item.description, when, url: item.url || ""
         });
     });
@@ -345,7 +355,7 @@ function nearestEvents() {
     topicsData.filter(item => myTopicIds.has(item.id) && !item.archived && item.deadline).forEach(item => {
         const when = calendarTime(item.deadline, "23.59");
         if (calendarTime(item.deadline) > start && when <= end) events.push({
-            kind: "Доклад", icon: "📚", title: item.title,
+            kind: "Доклад", title: item.title,
             dateLabel: item.deadline, details: shortSubject(item.subject), when, url: item.url || ""
         });
     });
@@ -357,14 +367,14 @@ function todayDeadlineEvents() {
     const events = assignmentsData
         .filter(item => !item.archived && item.deadline === today)
         .map(item => ({
-            kind: "Домашка", icon: "📝", title: item.subject,
+            kind: "Домашка", title: item.subject,
             details: item.description, url: item.url || ""
         }));
     const myTopicIds = new Set(myBookings.map(item => item.id));
     topicsData
         .filter(item => myTopicIds.has(item.id) && !item.archived && item.deadline === today)
         .forEach(item => events.push({
-            kind: "Доклад", icon: "📚", title: item.title,
+            kind: "Доклад", title: item.title,
             details: shortSubject(item.subject), url: item.url || ""
         }));
     return events.sort((a, b) => a.kind.localeCompare(b.kind, "ru") || a.title.localeCompare(b.title, "ru"));
@@ -378,28 +388,87 @@ function renderToday() {
     const deadlines = todayDeadlineEvents();
     const announcements = announcementsData.slice(0, 3);
     const nearest = nearestEvents();
+    const nearestLessonIds = new Set(nearest.map(item => item.lessonId).filter(Boolean));
+    const additionalPresentationLessons = studentPresentations.filter(item =>
+        item.date !== today && !nearestLessonIds.has(item.lessonId));
     const announcementSection = announcements.length ? `<section class="hub-section">
-        <h3>📣 Объявления</h3><div class="hub-list">${announcements.map(item => `<article class="hub-card announcement-card">
+        <h3>Объявления</h3><div class="hub-list">${announcements.map(item => `<article class="hub-card announcement-card">
             <strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.body)}</p>
             ${resourceButton(item.url, "Открыть")}</article>`).join("")}</div></section>` : "";
-    const lessonSection = lessons.length || deadlines.length ? `<section class="hub-section"><h3>📅 Сегодня</h3>
+    const lessonSection = lessons.length || deadlines.length ? `<section class="hub-section"><h3>Сегодня</h3>
         <div class="hub-list">${lessons.map(item => `<article class="hub-card today-lesson">
             <div class="hub-card-top"><strong>${escapeHtml(item.subject)}</strong><span>${escapeHtml(item.time)}</span></div>
             <p>${escapeHtml([item.teacher, item.room].filter(Boolean).join(" · ") || "Детали не указаны")}</p>
-            ${resourceButton(item.url, "Подключиться к паре")}</article>`).join("")}
+            ${resourceButton(item.url, "Подключиться к паре")}${renderStudentPresentationQueue(item.id)}</article>`).join("")}
             ${deadlines.map(item => `<article class="hub-card today-deadline">
-                <div class="hub-card-top"><strong>${item.icon} ${escapeHtml(item.kind)}</strong><span>Срок сегодня</span></div>
+                <div class="hub-card-top"><strong>${escapeHtml(item.kind)}</strong><span>Срок сегодня</span></div>
                 <h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.details)}</p>
-                ${resourceButton(item.url, "🔗 Открыть материалы")}</article>`).join("")}</div></section>` : "";
-    const queueSection = presentationQueues.length ? `<section class="hub-section"><h3>🎤 Очередь выступлений</h3>
+                ${resourceButton(item.url, "Открыть материалы")}</article>`).join("")}</div></section>` : "";
+    const queueSection = presentationQueues.length ? `<section class="hub-section"><h3>Очередь докладов</h3>
         <div class="hub-list">${presentationQueues.map((queue, queueIndex) => renderPresentationQueue(queue, queueIndex)).join("")}</div></section>` : "";
-    const nearestSection = `<section class="hub-section"><h3>⏳ Ближайшее</h3>
+    const nearestSection = `<section class="hub-section"><h3>Ближайшее</h3>
         <div class="hub-list">${nearest.length ? nearest.map(item => `<article class="hub-card nearby-item">
-            <div class="hub-card-top"><strong>${item.icon} ${escapeHtml(item.kind)}</strong><span>${escapeHtml(item.dateLabel)}</span></div>
+            <div class="hub-card-top"><strong>${escapeHtml(item.kind)}</strong><span>${escapeHtml(item.dateLabel)}</span></div>
             <h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.details)}</p>${resourceButton(
-                item.url, item.kind === "Пара" ? "Ссылка на пару" : "🔗 Открыть материалы")}
+                item.url, item.kind === "Пара" ? "Ссылка на пару" : "Открыть материалы")}
+            ${item.lessonId ? renderStudentPresentationQueue(item.lessonId) : ""}
         </article>`).join("") : '<div class="empty-state compact">На ближайшие семь дней событий нет.</div>'}</div></section>`;
-    container.innerHTML = `${announcementSection}${lessonSection}${queueSection}${nearestSection}`;
+    const additionalPresentationsSection = additionalPresentationLessons.length ? `<section class="hub-section">
+        <h3>Выступления</h3><div class="hub-list">${additionalPresentationLessons.map(item => `<article class="hub-card nearby-item">
+            <div class="hub-card-top"><strong>${escapeHtml(item.subject)}</strong><span>${escapeHtml(item.date)} · ${escapeHtml(item.time)}</span></div>
+            <p>${escapeHtml([item.teacher, item.room].filter(Boolean).join(" · "))}</p>
+            ${renderStudentPresentationQueue(item.lessonId)}</article>`).join("")}</div></section>` : "";
+    container.innerHTML = `${announcementSection}${lessonSection}${queueSection}${nearestSection}${additionalPresentationsSection}`;
+}
+
+function renderStudentPresentationQueue(lessonId) {
+    const queue = studentPresentations.find(item => item.lessonId === lessonId);
+    if (!queue) return "";
+    const entries = queue.entries || [];
+    const occupied = new Map(entries.map(item => [item.position, item]));
+    const own = entries.find(item => item.isMine);
+    const firstFree = Array.from({length: queue.slotCount}, (_, index) => index + 1)
+        .find(position => !occupied.has(position));
+    const selectedPosition = own?.position || firstFree || queue.slotCount;
+    const slots = Array.from({length: queue.slotCount}, (_, index) => {
+        const position = index + 1;
+        const entry = occupied.get(position);
+        return entry
+            ? `<li class="student-presentation-place occupied ${entry.isMine ? "mine" : ""}">
+                <b>${position}</b><div><strong>${escapeHtml(entry.name)}</strong><span>${escapeHtml(entry.topic)}</span></div></li>`
+            : `<li class="student-presentation-place empty"><b>${position}</b><span>Свободно</span></li>`;
+    }).join("");
+    const options = Array.from({length: queue.slotCount}, (_, index) => {
+        const position = index + 1;
+        const entry = occupied.get(position);
+        const label = entry ? `${position} — ${entry.name}${entry.isMine ? " (вы)" : ""}` : String(position);
+        return `<option value="${position}" ${position === selectedPosition ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    }).join("");
+    return `<details class="student-presentation" ${openStudentPresentationQueues.has(lessonId) ? "open" : ""}
+        ontoggle="setStudentPresentationOpen(${lessonId}, this.open)">
+        <summary>Список выступающих · ${participantCountLabel(entries.length)}</summary>
+        <ol class="student-presentation-places">${slots}</ol>
+        ${queue.editable ? `<div class="student-presentation-form">
+            <label class="form-label" for="student-presentation-topic-${lessonId}">Тема</label>
+            <input class="form-control" id="student-presentation-topic-${lessonId}" maxlength="200"
+                placeholder="Тема выступления" value="${escapeHtml(own?.topic || "")}">
+            <label class="form-label" for="student-presentation-position-${lessonId}">Место</label>
+            <select class="form-control" id="student-presentation-position-${lessonId}">${options}</select>
+            <button class="btn btn-primary" ${busy || !connected ? "disabled" : ""}
+                onclick="saveStudentPresentation(${lessonId})">${own ? "Сохранить" : "Записаться"}</button>
+            <small>Тему и место можно менять до конца пары.</small></div>` : "<p class=\"student-presentation-closed\">Пара завершена.</p>"}
+        </details>`;
+}
+
+function setStudentPresentationOpen(lessonId, isOpen) {
+    if (isOpen) openStudentPresentationQueues.add(lessonId);
+    else openStudentPresentationQueues.delete(lessonId);
+}
+
+async function saveStudentPresentation(lessonId) {
+    const topic = document.getElementById(`student-presentation-topic-${lessonId}`)?.value.trim();
+    const position = Number(document.getElementById(`student-presentation-position-${lessonId}`)?.value);
+    await performAction({action: "save_student_presentation", lessonId, topic, position});
 }
 
 function renderPresentationQueue(queue, queueIndex) {
@@ -481,12 +550,12 @@ function renderTopics() {
         return `<article class="topic-card ${mine ? "booked" : ""} ${topic.archived ? "archived" : ""}">
             <div class="topic-number">${topic.number}</div>
             <div class="topic-title">${escapeHtml(topic.title)}</div>
-            <div class="booking-owner" title="${escapeHtml(topic.subject || "Предмет не указан")}">📘 ${escapeHtml(shortSubject(topic.subject))}</div>
+            <div class="booking-owner" title="${escapeHtml(topic.subject || "Предмет не указан")}"> ${escapeHtml(shortSubject(topic.subject))}</div>
             <div class="booking-owner">Срок: ${escapeHtml(topic.deadline || "Не назначен")}</div>
             ${deadlineCountdownMarkup(topic.deadline)}
-            <div class="booking-owner">🎓 ${escapeHtml(scope)}</div>
-            ${topic.isMulti ? '<div class="booking-owner">🎤 Несколько выступающих</div>' : ""}
-            ${owners.map(b => `<div class="booking-owner">👥 ${escapeHtml(b.group)} · ${escapeHtml(b.user)}${b.isMine ? " (вы)" : ""}</div>`).join("")}
+            <div class="booking-owner"> ${escapeHtml(scope)}</div>
+            ${topic.isMulti ? '<div class="booking-owner"> Несколько выступающих</div>' : ""}
+            ${owners.map(b => `<div class="booking-owner"> ${escapeHtml(b.group)} · ${escapeHtml(b.user)}${b.isMine ? " (вы)" : ""}</div>`).join("")}
             ${occupied ? `<div class="topic-status">${escapeHtml(status)}</div>` : ""}
             ${resourceButton(topic.url)}
             ${topic.archived ? '<div class="archive-label">Архив</div>' : `<button class="btn ${mine ? "btn-danger" : "btn-primary"}"
@@ -598,11 +667,11 @@ async function saveProfile() { return submitProfile("edit_profile"); }
 function renderCabinet() {
     if (!isRegistered) { showRegistrationForm(); return; }
     document.getElementById("cabinetContent").innerHTML = `<div class="profile-card card">
-        <div class="profile-header"><div class="profile-avatar">👤</div>
-        <div><div class="profile-name">${escapeHtml(userData.name)}</div><div class="profile-status">✓ Профиль активен</div></div></div>
+        <div class="profile-header"><div class="profile-avatar">СП</div>
+        <div><div class="profile-name">${escapeHtml(userData.name)}</div><div class="profile-status">Профиль активен</div></div></div>
         <div class="info-item mb-12"><span class="label">Группа</span><span class="value">${escapeHtml(userData.group_name)}</span></div>
         <div class="info-item mb-12"><span class="label">Telegram</span><span class="value">${escapeHtml(userData.username ? "@" + userData.username : "Не указан")}</span></div>
-        <button class="btn btn-outline" onclick="editProfile()">✏️ Редактировать профиль</button></div>
+        <button class="btn btn-outline" onclick="editProfile()">Редактировать профиль</button></div>
         <div class="profile-card card"><h3 class="section-title">Моя активность</h3>
         <p>Выбранных тем: ${new Set(myBookings.filter(item => topicsData.some(topic => topic.id === item.id && !topic.archived)).map(item => item.id)).size}</p><p>Проведено занятий: ${scheduleData.filter(i => lessonEnd(i) < studyNow()).length}</p>
         <p>Домашних заданий: ${assignmentsData.filter(item => !item.archived).length}</p></div>`;
@@ -619,12 +688,12 @@ function renderAdmin() {
     document.getElementById("adminContent").innerHTML = `<div class="profile-card card">
         <h3 class="section-title">Управление</h3>
         <div class="admin-actions">
-        <button class="btn btn-primary" onclick="openTopicEditor()">📚 Управление темами</button>
-        <button class="btn btn-primary" onclick="openHomeworkEditor()">📝 Управление домашкой</button>
-        <button class="btn btn-primary" onclick="renderScheduleEditor()">🗓 Управление расписанием</button>
-        <button class="btn btn-primary" onclick="renderAnnouncementEditor()">📣 Объявления</button>
-        <button class="btn btn-primary" onclick="renderAdminStats()">📊 Статистика</button>
-        <button class="btn btn-outline" onclick="renderAuditLog()">🕘 История действий</button>
+        <button class="btn btn-primary" onclick="openTopicEditor()">Управление темами</button>
+        <button class="btn btn-primary" onclick="openHomeworkEditor()">Управление домашкой</button>
+        <button class="btn btn-primary" onclick="renderScheduleEditor()">Управление расписанием</button>
+        <button class="btn btn-primary" onclick="renderAnnouncementEditor()">Объявления</button>
+        <button class="btn btn-primary" onclick="renderAdminStats()">Статистика</button>
+        <button class="btn btn-outline" onclick="renderAuditLog()">История действий</button>
         </div></div>`;
 }
 
@@ -734,7 +803,7 @@ function renderTopicEditor() {
                 onchange="syncTopicScope('topic-${topic.id}')"> Общий доклад</label>
             <label><input type="checkbox" id="topic-multi-${topic.id}" ${topic.isMulti ? "checked" : ""}> Несколько выступающих</label>
             <div class="admin-bookings">${topic.bookings.length ? topic.bookings.map(item =>
-                `<div class="admin-booking"><span>👥 ${escapeHtml(item.group)} · ${escapeHtml(item.user)}</span>
+                `<div class="admin-booking"><span> ${escapeHtml(item.group)} · ${escapeHtml(item.user)}</span>
                 <button class="btn btn-danger btn-small" onclick="removeBooking(${item.bookingId})">Снять бронь</button></div>`).join("") : "Бронирований нет"}</div>
             <div class="admin-actions">
                 <button class="btn btn-outline" onclick="saveTopic(${topic.id})">Сохранить</button>
@@ -784,8 +853,8 @@ async function createTopic() {
 }
 
 function topicDraftPreview() {
-    const heading = adminTopicDrafts.length === 1 ? "📚 Добавлена новая тема доклада"
-        : `📚 Добавлены новые темы докладов: ${adminTopicDrafts.length}`;
+    const heading = adminTopicDrafts.length === 1 ? "Добавлена новая тема доклада"
+        : `Добавлены новые темы докладов: ${adminTopicDrafts.length}`;
     const rows = adminTopicDrafts.map(item => {
         const scope = item.isCommon ? "Общий доклад" : `Группа: ${item.group}`;
         const number = item.number ? `№${item.number}` : "№ назначится автоматически";
@@ -1061,9 +1130,9 @@ function renderHomework() {
             onclick="setHomeworkView('${item.value}')">${item.label}</button>`).join("");
     const items = assignmentsData.filter(item => Boolean(item.archived) === (currentHomeworkView === "archive"));
     container.innerHTML = items.length ? items.map(item => `<article class="topic-card homework-card ${item.archived ? "archived" : ""}">
-        <div class="booking-owner" title="${escapeHtml(item.subject)}">📘 ${escapeHtml(shortSubject(item.subject))}</div>
+        <div class="booking-owner" title="${escapeHtml(item.subject)}">${escapeHtml(shortSubject(item.subject))}</div>
         <div class="homework-description">${escapeHtml(item.description)}</div>
-        <div class="booking-owner">📅 Срок: ${escapeHtml(item.deadline)}</div>
+        <div class="booking-owner">Срок: ${escapeHtml(item.deadline)}</div>
         ${deadlineCountdownMarkup(item.deadline)}
         ${resourceButton(item.url)}
         ${item.archived ? '<div class="archive-label">Архив</div>' : ""}
@@ -1208,8 +1277,8 @@ function renderHomeworkNotificationPreview() {
     const deadline = apiDate(document.getElementById("newAssignmentDeadline")?.value) || "Дата срока";
     const hasMaterial = Boolean(document.getElementById("newAssignmentUrl")?.value.trim() ||
         document.getElementById("newAssignmentFile")?.files?.length);
-    preview.textContent = `📝 Добавлено домашнее задание\n${subject}\n${description}\n📅 Срок: ${deadline}${
-        hasMaterial ? "\n🔗 Открыть материалы" : ""}`;
+    preview.textContent = `Добавлено домашнее задание\n${subject}\n${description}\nСрок: ${deadline}${
+        hasMaterial ? "\nОткрыть материалы" : ""}`;
 }
 
 function renderAuditLog() {
@@ -1370,7 +1439,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (!filtered.length) {
             container.innerHTML = `
                 <div class="empty-state">
-                    <div class="icon">📭</div>
                     <div>${filter === "past" ? "Прошедших занятий пока нет." : "Предстоящих занятий по выбранному фильтру нет."}</div>
                 </div>
             `;
@@ -1489,13 +1557,13 @@ document.addEventListener("DOMContentLoaded", async () => {
                             </span>
 
                             <span class="value">
-                                ${todayLesson ? "● Сегодня" : (done ? "✓ Проведено" : "• Предстоит")}
+                                ${todayLesson ? "Сегодня" : (done ? "Проведено" : "Предстоит")}
                             </span>
                         </div>
 
                     </div>
 
-                    ${item.url ? `<a class="btn btn-primary lesson-link-button" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">🔗 Подключиться к паре</a>` : ""}
+                    ${item.url ? `<a class="btn btn-primary lesson-link-button" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">Подключиться к паре</a>` : ""}
 
                 </article>
             `;

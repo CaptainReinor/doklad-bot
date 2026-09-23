@@ -61,11 +61,11 @@ def create_bot(service, token, *, threaded=True, web_app_url=WEB_APP_URL):
         if not private(message):
             return False
         if not service.is_admin(message.from_user.id):
-            send(message.chat.id, '⛔ У вас нет прав.')
+            send(message.chat.id, 'У вас нет прав.')
             return False
         return True
 
-    def open_app(chat_id, prompt='📱 Откройте приложение:'):
+    def open_app(chat_id, prompt='Откройте приложение:'):
         parsed = urlparse(web_app_url)
         if parsed.scheme != 'https' or not parsed.netloc:
             send(chat_id, 'Администратору нужно указать HTTPS-адрес приложения в WEB_APP_URL.')
@@ -80,7 +80,7 @@ def create_bot(service, token, *, threaded=True, web_app_url=WEB_APP_URL):
             logger.warning('Could not update the chat menu button: %s', type(exc).__name__)
         markup = telebot.types.InlineKeyboardMarkup()
         markup.add(telebot.types.InlineKeyboardButton(
-            '🚀 Открыть приложение', web_app=telebot.types.WebAppInfo(url=web_app_url)))
+            'Открыть приложение', web_app=telebot.types.WebAppInfo(url=web_app_url)))
         send(chat_id, prompt, reply_markup=markup)
 
     @client.message_handler(commands=['start', 'app'])
@@ -93,7 +93,7 @@ def create_bot(service, token, *, threaded=True, web_app_url=WEB_APP_URL):
             if service.db.get_user(user_id):
                 open_app(message.chat.id)
                 return
-        open_app(message.chat.id, '👋 Добро пожаловать! Откройте приложение и зарегистрируйтесь во вкладке «Кабинет».')
+        open_app(message.chat.id, 'Добро пожаловать! Откройте приложение и зарегистрируйтесь во вкладке «Кабинет».')
 
     @client.message_handler(commands=['register'])
     def begin_registration(message):
@@ -105,7 +105,7 @@ def create_bot(service, token, *, threaded=True, web_app_url=WEB_APP_URL):
             return
         with registration_lock:
             registration[user_id] = {'step': 'first_name'}
-        send(message.chat.id, '👋 Добро пожаловать!\nДля регистрации введите ваше имя.\nОтмена: /cancel')
+        send(message.chat.id, 'Добро пожаловать!\nДля регистрации введите ваше имя.\nОтмена: /cancel')
 
     @client.message_handler(commands=['cancel'])
     def cancel_registration(message):
@@ -130,7 +130,7 @@ def create_bot(service, token, *, threaded=True, web_app_url=WEB_APP_URL):
         if not admin(message):
             return
         rows = service.db.get_all_users()
-        text = '📋 Зарегистрированные студенты:\n\n' + '\n'.join(
+        text = 'Зарегистрированные студенты:\n\n' + '\n'.join(
             f"{i}. {u['first_name']} {u['last_name']} ({u['group_name']}) — ID: {u['user_id']}"
             for i, u in enumerate(rows, 1))
         send(message.chat.id, text + f'\n\nВсего: {len(rows)}')
@@ -143,7 +143,7 @@ def create_bot(service, token, *, threaded=True, web_app_url=WEB_APP_URL):
         activity = service.db.get_admin_stats()
         groups = sorted({u['group_name'] for u in users})
         booked_topics = {row['topic'] for row in bookings}
-        text = (f'📊 Студентов: {len(users)}\nВходов сегодня: {activity["visitsToday"]}\n'
+        text = (f'Студентов: {len(users)}\nВходов сегодня: {activity["visitsToday"]}\n'
                 f'Входов за 7 дней: {activity["visits7Days"]}\n'
                 f'Тем: {len(service.catalog()["topics"])}\n'
                 f'Занятых тем: {len(booked_topics)}\nВыступающих: {len(bookings)}\n')
@@ -183,7 +183,7 @@ def create_bot(service, token, *, threaded=True, web_app_url=WEB_APP_URL):
                     service.perform(user_id, {'action': 'register', 'user': data}, message.from_user.to_dict())
                     del registration[user_id]
                     send(message.chat.id,
-                         f"✅ Регистрация завершена.\n{data['first_name']} {data['last_name']}\nГруппа: {data['group_name']}",
+                         f"Регистрация завершена.\n{data['first_name']} {data['last_name']}\nГруппа: {data['group_name']}",
                          reply_markup=telebot.types.ReplyKeyboardRemove())
                     open_app(message.chat.id)
             except ActionError as exc:

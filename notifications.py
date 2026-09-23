@@ -15,23 +15,26 @@ from storage import cleanup_uploads
 logger = logging.getLogger(__name__)
 DEADLINE_REMINDER_HOUR = 9
 URL_LINE_RE = re.compile(r'^(?P<prefix>.*?)(?P<url>https?://\S+)$')
+LEADING_ICON_RE = re.compile(
+    r'^[ \t]*[\U0001F000-\U0001FAFF\u2600-\u27BF\u2300-\u23FF\u2B00-\u2BFF]+\ufe0f?\s*')
 
 
 def notification_html(message):
     """Hide technical URLs behind short Telegram HTML links."""
     lines = []
-    for line in message.splitlines():
+    for raw_line in message.splitlines():
+        line = LEADING_ICON_RE.sub('', raw_line)
         match = URL_LINE_RE.match(line)
         if not match:
             lines.append(html.escape(line))
             continue
         prefix, url = match.group('prefix'), match.group('url')
         if 'Материалы:' in prefix:
-            label, replacement = 'Открыть материалы', '🔗 '
+            label, replacement = 'Открыть материалы', ''
         elif 'Подробнее:' in prefix:
-            label, replacement = 'Подробнее', '🔗 '
+            label, replacement = 'Подробнее', ''
         elif 'Ссылка:' in prefix:
-            label, replacement = 'Подключиться к паре', '🔗 '
+            label, replacement = 'Подключиться к паре', ''
         else:
             label, replacement = 'Открыть ссылку', prefix
         lines.append(f'{html.escape(replacement)}<a href="{html.escape(url, quote=True)}">{label}</a>')
@@ -71,8 +74,8 @@ def lesson_start(lesson, timezone):
 def lesson_day_message(lessons, now, timezone):
     first_start = lesson_start(lessons[0], timezone)
     minutes = max(1, math.ceil((first_start - now).total_seconds() / 60))
-    heading = ('⏰ Занятия начнутся примерно через час' if minutes >= 55
-               else f'⏰ Занятия начнутся через {minutes} мин.')
+    heading = ('Занятия начнутся примерно через час' if minutes >= 55
+               else f'Занятия начнутся через {minutes} мин.')
     lesson_date = first_start.date()
     if lesson_date == now.date():
         day = 'Сегодня'
@@ -89,7 +92,7 @@ def lesson_day_message(lessons, now, timezone):
             f"Преподаватель: {lesson['teacher']}\n"
             f"Ссылка: {link}"
         )
-    return f"{heading}\n📅 {day}\n\n" + '\n\n'.join(rows)
+    return f"{heading}\n{day}\n\n" + '\n\n'.join(rows)
 
 
 def check_notifications(service, send_message, *, now=None):
@@ -133,9 +136,9 @@ def check_notifications(service, send_message, *, now=None):
             }
             details = (f"{item['subject']}\n{item['description']}" if kind == 'assignments'
                        else item['title'])
-            link = f"\n🔗 Материалы: {item['url']}" if item.get('url') else ''
+            link = f"\nМатериалы: {item['url']}" if item.get('url') else ''
             service.db.enqueue_notification(
-                kind, f"🔔 Срок сдачи завтра\n{details}\n📅 {deadline}{link}",
+                kind, f"Срок сдачи завтра\n{details}\n{deadline}{link}",
                 f"deadline:{kind}:{item['id']}:{deadline}", recipients,
                 next_attempt=deadline_reminder_time(now).timestamp())
     direct_jobs = []
@@ -198,13 +201,13 @@ def check_notifications(service, send_message, *, now=None):
         kinds = {kind for entry in merged.values() for kind in entry['kinds']}
         count = len(merged)
         if kinds == {'topic-added'}:
-            heading = ('📚 Добавлена новая тема доклада' if count == 1 else
-                       f'📚 Добавлены новые темы докладов: {count}')
+            heading = ('Добавлена новая тема доклада' if count == 1 else
+                       f'Добавлены новые темы докладов: {count}')
         elif kinds == {'topic-changed'}:
-            heading = ('📚 Изменена тема доклада' if count == 1 else
-                       f'📚 Изменены темы докладов: {count}')
+            heading = ('Изменена тема доклада' if count == 1 else
+                       f'Изменены темы докладов: {count}')
         else:
-            heading = f'📚 Обновления тем докладов: {count}'
+            heading = f'Обновления тем докладов: {count}'
         message = heading + '\n\n' + '\n\n'.join(lines)
         try:
             send_message(user_id, message)

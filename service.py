@@ -1,7 +1,7 @@
 """Validated actions used by Telegram handlers and HTTP routes."""
 import re
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
@@ -11,6 +11,10 @@ from settings import ADMIN_IDS, APP_TIMEZONE
 
 ALLOWED_GROUPS = ('МН-4-25-01', 'МН-4-25-02')
 ENGLISH_SUBJECT = 'Иностранный язык профессиональных коммуникаций'
+STUDENT_PRESENTATION_SUBJECTS = frozenset({
+    'Управление бизнес-процессами',
+    'Методы реализации научно-исследовательских проектов',
+})
 
 
 class ActionError(ValueError):
@@ -273,6 +277,61 @@ class Service:
             })
         return result
 
+    @staticmethod
+    def _student_presentation_end(lesson):
+        times = re.findall(r'\d{1,2}[.:]\d{2}', lesson.get('time', ''))
+        if len(times) < 2:
+            raise ValueError('В расписании указано некорректное время пары.')
+        lesson_day = datetime.strptime(lesson['date'], '%d.%m.%Y').date()
+        end_hour, end_minute = map(int, re.split(r'[.:]', times[1]))
+        return datetime(lesson_day.year, lesson_day.month, lesson_day.day,
+                        end_hour, end_minute, tzinfo=ZoneInfo(APP_TIMEZONE))
+
+    @staticmethod
+    def _is_student_presentation_lesson(lesson):
+        return (lesson.get('subject') in STUDENT_PRESENTATION_SUBJECTS and
+                'золотухин' in (lesson.get('teacher') or '').casefold())
+
+    def student_presentations(self, user_id, *, lessons=None, now=None):
+        now = now or datetime.now(ZoneInfo(APP_TIMEZONE))
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=ZoneInfo(APP_TIMEZONE))
+        else:
+            now = now.astimezone(ZoneInfo(APP_TIMEZONE))
+        today = now.date()
+        visible_lessons = lessons if lessons is not None else self.visible_lessons(user_id)
+        selected = []
+        for lesson in visible_lessons:
+            if not self._is_student_presentation_lesson(lesson):
+                continue
+            lesson_day = datetime.strptime(lesson['date'], '%d.%m.%Y').date()
+            if today <= lesson_day <= today + timedelta(days=7):
+                selected.append(lesson)
+        rows = self.db.get_student_presentations([lesson['id'] for lesson in selected])
+        by_lesson = {}
+        for row in rows:
+            by_lesson.setdefault(row['lesson_id'], []).append({
+                'position': row['position'],
+                'topic': row['topic'],
+                'name': f"{row['first_name']} {row['last_name']}".strip(),
+                'isMine': row['user_id'] == user_id,
+            })
+        result = []
+        for lesson in selected:
+            entries = by_lesson.get(lesson['id'], [])
+            result.append({
+                'lessonId': lesson['id'],
+                'date': lesson['date'],
+                'time': lesson['time'],
+                'subject': lesson['subject'],
+                'teacher': lesson['teacher'],
+                'room': lesson['room'],
+                'entries': entries,
+                'slotCount': max(20, max((item['position'] for item in entries), default=0) + 1),
+                'editable': now <= self._student_presentation_end(lesson),
+            })
+        return result
+
     def catalog(self, user_id=None, *, public=False):
         result = load_catalog()
         result['schedule'] = (self.visible_lessons(user_id) if public else self.db.get_lessons())
@@ -316,6 +375,8 @@ class Service:
                    'notifications': settings, 'participants': len({r['user_id'] for r in visible_rows}),
                    'isAdmin': is_admin,
                    'announcements': announcements,
+                   'studentPresentations': self.student_presentations(
+                       user_id, lessons=queue_lessons),
                    'presentationQueues': self.presentation_queues(
                        user_id, lessons=queue_lessons, topics=visible_topics, booking_rows=rows)}
         if result['isAdmin']:
@@ -377,6 +438,28 @@ class Service:
                 self.db.log_audit(user_id, 'delete', 'announcement', announcement_id,
                                   f"Удалено объявление: {existing['title']}")
                 return 'Объявление удалено.'
+            if action == 'save_student_presentation':
+                if not current:
+                    raise ActionError('Сначала заполните профиль.', 403)
+                lesson_id, position = data.get('lessonId'), data.get('position')
+                if type(lesson_id) is not int or type(position) is not int or position < 1:
+                    raise ActionError('Выберите место в списке выступлений.')
+                lesson = next((item for item in self.visible_lessons(user_id)
+                               if item['id'] == lesson_id and
+                               self._is_student_presentation_lesson(item)), None)
+                if not lesson:
+                    raise ActionError('Пара не найдена.')
+                now = datetime.now(ZoneInfo(APP_TIMEZONE))
+                if now > self._student_presentation_end(lesson):
+                    raise ActionError('Пара уже закончилась.', 409)
+                topic = clean_text(data.get('topic'), 'тему выступления', 3, 200)
+                entries = self.db.get_student_presentations([lesson_id])
+                slot_count = max(20, max((item['position'] for item in entries), default=0) + 1)
+                if position > slot_count:
+                    raise ActionError('Выберите место из списка.')
+                topic_key = unicodedata.normalize('NFKC', topic).casefold()
+                self.db.save_student_presentation(lesson_id, user_id, position, topic, topic_key)
+                return 'Запись сохранена.'
             if action in ('choose_presentation_position', 'leave_presentation_queue'):
                 if not current:
                     raise ActionError('Сначала заполните профиль.', 403)

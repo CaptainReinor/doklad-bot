@@ -1150,6 +1150,19 @@
         .queue-slot.empty:hover { border-color: var(--primary); background: rgba(36, 129, 204, .07); }
         .queue-slot.occupied.mine { border-color: rgba(34, 160, 107, .45); background: rgba(34, 160, 107, .07); }
         .queue-slot .btn { grid-column: 2; width: max-content; margin-top: 4px; }
+        .student-presentation { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+        .student-presentation summary { color: var(--primary); cursor: pointer; font-weight: 650; }
+        .student-presentation-places { display: grid; gap: 6px; margin: 10px 0 14px; padding: 0; list-style: none; }
+        .student-presentation-place { display: grid; grid-template-columns: 32px 1fr; align-items: center; gap: 8px; min-height: 42px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 10px; }
+        .student-presentation-place b { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: rgba(36, 129, 204, .12); color: var(--primary); }
+        .student-presentation-place div { display: grid; min-width: 0; }
+        .student-presentation-place span { color: var(--hint); font-size: 12px; overflow-wrap: anywhere; }
+        .student-presentation-place.empty { color: var(--hint); border-style: dashed; }
+        .student-presentation-place.mine { border-color: rgba(34, 160, 107, .45); background: rgba(34, 160, 107, .07); }
+        .student-presentation-form { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 8px; }
+        .student-presentation-form .form-label { margin: 0; }
+        .student-presentation-form button, .student-presentation-form small { grid-column: 2; }
+        .student-presentation-form small, .student-presentation-closed { color: var(--hint); font-size: 12px; }
         .file-control { padding: 8px; }
         button:disabled { opacity: .55; cursor: not-allowed; }
         @media (max-width: 560px) {
@@ -1167,7 +1180,7 @@
     <!-- HEADER -->
     <header class="header">
         <div class="brand">
-            <div class="brand-avatar">🎓</div>
+            <div class="brand-avatar">СП</div>
 
             <div class="brand-text">
                 <h1 class="brand-title">МН-4-25</h1>
@@ -1249,8 +1262,7 @@
     <!-- ==================== СЕГОДНЯ ==================== -->
 
     <section id="today" class="tab-content active">
-        <h2 class="section-title">✨ Сегодня</h2>
-        <p class="section-subtitle">Пары, выступления и ближайшие дела</p>
+        <h2 class="section-title">Сегодня</h2>
         <div id="todayContent"></div>
     </section>
 
@@ -1260,13 +1272,7 @@
         id="schedule"
         class="tab-content"
     >
-        <h2 class="section-title">
-            📅 Расписание
-        </h2>
-
-        <p class="section-subtitle">
-            Расписание занятий
-        </p>
+        <h2 class="section-title">Расписание</h2>
 
         <div class="stats-grid">
             <div class="stat-card">
@@ -1365,7 +1371,7 @@
             class="btn btn-primary"
             onclick="downloadSchedule()"
         >
-            📄 Скачать расписание PDF
+            Скачать расписание PDF
         </button>
     </section>
 
@@ -1376,9 +1382,7 @@
         id="homework"
         class="tab-content"
     >
-        <h2 class="section-title">
-            📝 Домашка
-        </h2>
+        <h2 class="section-title">Домашка</h2>
 
         <p class="section-subtitle">
             Актуальные и прошедшие задания, описание и срок сдачи
@@ -1396,9 +1400,7 @@
         id="reports"
         class="tab-content"
     >
-        <h2 class="section-title">
-            📚 Доклады
-        </h2>
+        <h2 class="section-title">Доклады</h2>
 
         <p class="section-subtitle">
             Выберите актуальную тему
@@ -1462,13 +1464,7 @@
         id="cabinet"
         class="tab-content"
     >
-        <h2 class="section-title">
-            👤 Кабинет
-        </h2>
-
-        <p class="section-subtitle">
-            Личные данные студента
-        </p>
+        <h2 class="section-title">Кабинет</h2>
 
         <div id="cabinetContent"></div>
     </section>
@@ -1480,13 +1476,7 @@
         id="admin"
         class="tab-content"
     >
-        <h2 class="section-title">
-            🛠 Админ
-        </h2>
-
-        <p class="section-subtitle">
-            Управление содержимым приложения
-        </p>
+        <h2 class="section-title">Админ</h2>
 
         <div id="adminContent"></div>
     </section>
@@ -1498,13 +1488,7 @@
         id="notifications"
         class="tab-content"
     >
-        <h2 class="section-title">
-            🔔 Уведомления
-        </h2>
-
-        <p class="section-subtitle">
-            Настройте уведомления, которые хотите получать
-        </p>
+        <h2 class="section-title">Уведомления</h2>
 
         <div
             id="notificationsContainer"
@@ -1519,7 +1503,7 @@
 
 
 <script src="config.js?v=20260905-2"></script>
-<script src="app.js?v=20260914-3" defer></script>
+    <script src="app.js?v=20260923-1" defer></script>
 
 </body>
 </html>

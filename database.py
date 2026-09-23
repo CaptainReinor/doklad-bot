@@ -169,6 +169,20 @@ class Database:
                 [(index, item['date'], item['day'], item['time'], item['type'], item['subject'],
                   item['teacher'], item['room'], item['group'], item.get('url', ''), now, now)
                  for index, item in enumerate(load_catalog()['schedule'], 1)])
+            conn.execute('''CREATE TABLE IF NOT EXISTS student_presentations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lesson_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                position INTEGER NOT NULL,
+                topic TEXT NOT NULL,
+                topic_key TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(lesson_id, user_id),
+                UNIQUE(lesson_id, position),
+                UNIQUE(lesson_id, topic_key),
+                FOREIGN KEY(lesson_id) REFERENCES lessons(id) ON DELETE CASCADE,
+                FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE)''')
             conn.execute('''CREATE TABLE IF NOT EXISTS deadlines (
                 kind TEXT NOT NULL, item_id INTEGER NOT NULL, deadline TEXT NOT NULL,
                 PRIMARY KEY(kind, item_id))''')
@@ -290,7 +304,7 @@ class Database:
                                  (number, row['id']))
             conn.execute('''CREATE UNIQUE INDEX IF NOT EXISTS idx_topics_subject_number
                 ON topics(subject, display_number) WHERE deleted=0''')
-            conn.execute('PRAGMA user_version=15')
+            conn.execute('PRAGMA user_version=16')
 
     @staticmethod
     def _user(conn, user_id):
@@ -800,6 +814,77 @@ class Database:
             conn.execute('UPDATE lessons SET active=0, deleted=1, updated_at=? WHERE id=?',
                          (timestamp(), lesson_id))
             return True
+
+    def get_student_presentations(self, lesson_ids):
+        lesson_ids = sorted({value for value in lesson_ids if type(value) is int})
+        if not lesson_ids:
+            return []
+        placeholders = ','.join('?' for _ in lesson_ids)
+        with self.connection() as conn:
+            return [dict(row) for row in conn.execute(f'''SELECT p.lesson_id, p.user_id,
+                    p.position, p.topic, u.first_name, u.last_name
+                FROM student_presentations p JOIN users u ON u.user_id=p.user_id
+                WHERE p.lesson_id IN ({placeholders})
+                ORDER BY p.lesson_id, p.position''', lesson_ids)]
+
+    def save_student_presentation(self, lesson_id, user_id, position, topic, topic_key):
+        now = timestamp()
+        try:
+            with self.connection() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                duplicate = conn.execute('''SELECT user_id FROM student_presentations
+                    WHERE lesson_id=? AND topic_key=? AND user_id<>?''',
+                                         (lesson_id, topic_key, user_id)).fetchone()
+                if duplicate:
+                    raise TopicInUse('Эта тема уже выбрана. Укажите другую.')
+                current = conn.execute('''SELECT id, position FROM student_presentations
+                    WHERE lesson_id=? AND user_id=?''', (lesson_id, user_id)).fetchone()
+                occupied = conn.execute('''SELECT user_id FROM student_presentations
+                    WHERE lesson_id=? AND position=?''', (lesson_id, position)).fetchone()
+                if current and occupied and occupied['user_id'] != user_id:
+                    conn.execute('UPDATE student_presentations SET position=0 WHERE id=?',
+                                 (current['id'],))
+                    conn.execute('''UPDATE student_presentations SET position=?
+                        WHERE lesson_id=? AND user_id=?''',
+                                 (current['position'], lesson_id, occupied['user_id']))
+                    conn.execute('''UPDATE student_presentations
+                        SET position=?, topic=?, topic_key=?, updated_at=? WHERE id=?''',
+                                 (position, topic, topic_key, now, current['id']))
+                elif current:
+                    conn.execute('''UPDATE student_presentations
+                        SET position=?, topic=?, topic_key=?, updated_at=? WHERE id=?''',
+                                 (position, topic, topic_key, now, current['id']))
+                else:
+                    if occupied:
+                        existing = list(conn.execute('''SELECT id, position FROM student_presentations
+                            WHERE lesson_id=? ORDER BY position, id''', (lesson_id,)))
+                        cursor = conn.execute('''INSERT INTO student_presentations
+                            (lesson_id, user_id, position, topic, topic_key, created_at, updated_at)
+                            VALUES (?, ?, 0, ?, ?, ?, ?)''',
+                                               (lesson_id, user_id, topic, topic_key, now, now))
+                        new_id = cursor.lastrowid
+                        for row in existing:
+                            conn.execute('UPDATE student_presentations SET position=? WHERE id=?',
+                                         (-row['position'], row['id']))
+                        for row in existing:
+                            new_position = row['position'] + (row['position'] >= position)
+                            conn.execute('UPDATE student_presentations SET position=? WHERE id=?',
+                                         (new_position, row['id']))
+                        conn.execute('UPDATE student_presentations SET position=? WHERE id=?',
+                                     (position, new_id))
+                    else:
+                        conn.execute('''INSERT INTO student_presentations
+                            (lesson_id, user_id, position, topic, topic_key, created_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                                     (lesson_id, user_id, position, topic, topic_key, now, now))
+        except sqlite3.IntegrityError as exc:
+            with self.connection() as conn:
+                duplicate = conn.execute('''SELECT 1 FROM student_presentations
+                    WHERE lesson_id=? AND topic_key=? AND user_id<>?''',
+                                         (lesson_id, topic_key, user_id)).fetchone()
+            if duplicate:
+                raise TopicInUse('Эта тема уже выбрана. Укажите другую.') from exc
+            raise BookingConflict('Не удалось сохранить место. Обновите список и попробуйте ещё раз.') from exc
 
     @staticmethod
     def _assignment(conn, assignment_id):
