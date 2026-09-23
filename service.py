@@ -311,6 +311,7 @@ class Service:
         by_lesson = {}
         for row in rows:
             by_lesson.setdefault(row['lesson_id'], []).append({
+                'presentationId': row['presentation_id'],
                 'position': row['position'],
                 'topic': row['topic'],
                 'name': f"{row['first_name']} {row['last_name']}".strip(),
@@ -328,7 +329,7 @@ class Service:
                 'room': lesson['room'],
                 'entries': entries,
                 'slotCount': max(20, max((item['position'] for item in entries), default=0) + 1),
-                'editable': now <= self._student_presentation_end(lesson),
+                'editable': now < self._student_presentation_end(lesson),
             })
         return result
 
@@ -444,13 +445,20 @@ class Service:
                 lesson_id, position = data.get('lessonId'), data.get('position')
                 if type(lesson_id) is not int or type(position) is not int or position < 1:
                     raise ActionError('Выберите место в списке выступлений.')
+                confirm_occupied = data.get('confirmOccupied', False)
+                expected_occupant_id = data.get('expectedOccupantId')
+                if type(confirm_occupied) is not bool:
+                    raise ActionError('Не удалось проверить выбранное место.')
+                if expected_occupant_id is not None and (
+                        type(expected_occupant_id) is not int or expected_occupant_id < 1):
+                    raise ActionError('Обновите список выступающих и выберите место снова.', 409)
                 lesson = next((item for item in self.visible_lessons(user_id)
                                if item['id'] == lesson_id and
                                self._is_student_presentation_lesson(item)), None)
                 if not lesson:
                     raise ActionError('Пара не найдена.')
                 now = datetime.now(ZoneInfo(APP_TIMEZONE))
-                if now > self._student_presentation_end(lesson):
+                if now >= self._student_presentation_end(lesson):
                     raise ActionError('Пара уже закончилась.', 409)
                 topic = clean_text(data.get('topic'), 'тему выступления', 3, 200)
                 entries = self.db.get_student_presentations([lesson_id])
@@ -458,7 +466,10 @@ class Service:
                 if position > slot_count:
                     raise ActionError('Выберите место из списка.')
                 topic_key = unicodedata.normalize('NFKC', topic).casefold()
-                self.db.save_student_presentation(lesson_id, user_id, position, topic, topic_key)
+                self.db.save_student_presentation(
+                    lesson_id, user_id, position, topic, topic_key,
+                    confirm_occupied=confirm_occupied,
+                    expected_occupant_id=expected_occupant_id)
                 return 'Запись сохранена.'
             if action in ('choose_presentation_position', 'leave_presentation_queue'):
                 if not current:

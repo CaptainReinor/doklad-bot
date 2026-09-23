@@ -821,13 +821,15 @@ class Database:
             return []
         placeholders = ','.join('?' for _ in lesson_ids)
         with self.connection() as conn:
-            return [dict(row) for row in conn.execute(f'''SELECT p.lesson_id, p.user_id,
+            return [dict(row) for row in conn.execute(f'''SELECT p.id AS presentation_id,
+                    p.lesson_id, p.user_id,
                     p.position, p.topic, u.first_name, u.last_name
                 FROM student_presentations p JOIN users u ON u.user_id=p.user_id
                 WHERE p.lesson_id IN ({placeholders})
                 ORDER BY p.lesson_id, p.position''', lesson_ids)]
 
-    def save_student_presentation(self, lesson_id, user_id, position, topic, topic_key):
+    def save_student_presentation(self, lesson_id, user_id, position, topic, topic_key,
+                                  *, confirm_occupied=False, expected_occupant_id=None):
         now = timestamp()
         try:
             with self.connection() as conn:
@@ -839,8 +841,16 @@ class Database:
                     raise TopicInUse('Эта тема уже выбрана. Укажите другую.')
                 current = conn.execute('''SELECT id, position FROM student_presentations
                     WHERE lesson_id=? AND user_id=?''', (lesson_id, user_id)).fetchone()
-                occupied = conn.execute('''SELECT user_id FROM student_presentations
+                occupied = conn.execute('''SELECT id, user_id FROM student_presentations
                     WHERE lesson_id=? AND position=?''', (lesson_id, position)).fetchone()
+                occupied_by_other = occupied and occupied['user_id'] != user_id
+                if occupied_by_other and not confirm_occupied:
+                    raise BookingConflict('Место уже занято. Подтвердите перестановку.')
+                if expected_occupant_id is not None and (
+                        not occupied or occupied['id'] != expected_occupant_id):
+                    raise BookingConflict('Список изменился. Обновите его и выберите место снова.')
+                if occupied_by_other and expected_occupant_id is None:
+                    raise BookingConflict('Список изменился. Обновите его и подтвердите перестановку.')
                 if current and occupied and occupied['user_id'] != user_id:
                     conn.execute('UPDATE student_presentations SET position=0 WHERE id=?',
                                  (current['id'],))

@@ -5,6 +5,7 @@ const apiBase = (window.APP_CONFIG?.apiBaseUrl || window.location.origin).replac
 let scheduleData = [], topicsData = [], assignmentsData = [], announcementsData = [];
 let presentationQueues = [], studentPresentations = [];
 const openStudentPresentationQueues = new Set();
+const visibleStudentPresentationPlaces = new Map();
 let bookings = [], myBookings = [], notificationSettings = {};
 let adminTopics = [], adminLessons = [], adminAssignments = [], adminAnnouncements = [];
 let adminTopicDrafts = [], adminAuditLog = [], adminStats = null;
@@ -425,29 +426,41 @@ function renderStudentPresentationQueue(lessonId) {
     const queue = studentPresentations.find(item => item.lessonId === lessonId);
     if (!queue) return "";
     const entries = queue.entries || [];
+    if (!queue.editable && !entries.length) return "";
     const occupied = new Map(entries.map(item => [item.position, item]));
     const own = entries.find(item => item.isMine);
     const firstFree = Array.from({length: queue.slotCount}, (_, index) => index + 1)
         .find(position => !occupied.has(position));
     const selectedPosition = own?.position || firstFree || queue.slotCount;
-    const slots = Array.from({length: queue.slotCount}, (_, index) => {
-        const position = index + 1;
-        const entry = occupied.get(position);
-        return entry
-            ? `<li class="student-presentation-place occupied ${entry.isMine ? "mine" : ""}">
-                <b>${position}</b><div><strong>${escapeHtml(entry.name)}</strong><span>${escapeHtml(entry.topic)}</span></div></li>`
-            : `<li class="student-presentation-place empty"><b>${position}</b><span>Свободно</span></li>`;
-    }).join("");
+    const placeCount = queue.editable ? queue.slotCount : entries.length;
+    const visibleCount = Math.min(placeCount, Math.max(10,
+        visibleStudentPresentationPlaces.get(lessonId) || 10));
+    const slots = queue.editable
+        ? Array.from({length: visibleCount}, (_, index) => {
+            const position = index + 1;
+            const entry = occupied.get(position);
+            return entry
+                ? `<li class="student-presentation-place occupied ${entry.isMine ? "mine" : ""}">
+                    <b>${position}</b><div><strong>${escapeHtml(entry.name)}</strong><span>${escapeHtml(entry.topic)}</span></div></li>`
+                : `<li class="student-presentation-place empty"><b>${position}</b><span>Свободно</span></li>`;
+        }).join("")
+        : entries.slice(0, visibleCount).map(entry =>
+            `<li class="student-presentation-place occupied ${entry.isMine ? "mine" : ""}">
+                <b>${entry.position}</b><div><strong>${escapeHtml(entry.name)}</strong><span>${escapeHtml(entry.topic)}</span></div></li>`
+        ).join("");
     const options = Array.from({length: queue.slotCount}, (_, index) => {
         const position = index + 1;
         const entry = occupied.get(position);
         const label = entry ? `${position} — ${entry.name}${entry.isMine ? " (вы)" : ""}` : String(position);
         return `<option value="${position}" ${position === selectedPosition ? "selected" : ""}>${escapeHtml(label)}</option>`;
     }).join("");
+    const remainingPlaces = placeCount - visibleCount;
     return `<details class="student-presentation" ${openStudentPresentationQueues.has(lessonId) ? "open" : ""}
         ontoggle="setStudentPresentationOpen(${lessonId}, this.open)">
         <summary>Список выступающих · ${participantCountLabel(entries.length)}</summary>
         <ol class="student-presentation-places">${slots}</ol>
+        ${remainingPlaces > 0 ? `<button class="btn btn-outline student-presentation-more"
+            onclick="showMoreStudentPresentationPlaces(${lessonId})">Показать ещё ${Math.min(10, remainingPlaces)}</button>` : ""}
         ${queue.editable ? `<div class="student-presentation-form">
             <label class="form-label" for="student-presentation-topic-${lessonId}">Тема</label>
             <input class="form-control" id="student-presentation-topic-${lessonId}" maxlength="200"
@@ -456,7 +469,7 @@ function renderStudentPresentationQueue(lessonId) {
             <select class="form-control" id="student-presentation-position-${lessonId}">${options}</select>
             <button class="btn btn-primary" ${busy || !connected ? "disabled" : ""}
                 onclick="saveStudentPresentation(${lessonId})">${own ? "Сохранить" : "Записаться"}</button>
-            <small>Тему и место можно менять до конца пары.</small></div>` : "<p class=\"student-presentation-closed\">Пара завершена.</p>"}
+            <small>Тему и место можно менять до конца пары.</small></div>` : ""}
         </details>`;
 }
 
@@ -465,10 +478,35 @@ function setStudentPresentationOpen(lessonId, isOpen) {
     else openStudentPresentationQueues.delete(lessonId);
 }
 
+function showMoreStudentPresentationPlaces(lessonId) {
+    const queue = studentPresentations.find(item => item.lessonId === lessonId);
+    if (!queue) return;
+    const visibleCount = Math.max(10, visibleStudentPresentationPlaces.get(lessonId) || 10);
+    visibleStudentPresentationPlaces.set(lessonId, Math.min(queue.slotCount, visibleCount + 10));
+    renderToday();
+}
+
 async function saveStudentPresentation(lessonId) {
     const topic = document.getElementById(`student-presentation-topic-${lessonId}`)?.value.trim();
     const position = Number(document.getElementById(`student-presentation-position-${lessonId}`)?.value);
-    await performAction({action: "save_student_presentation", lessonId, topic, position});
+    const queue = studentPresentations.find(item => item.lessonId === lessonId);
+    const own = queue?.entries?.find(item => item.isMine);
+    const occupant = queue?.entries?.find(item => item.position === position);
+    let confirmOccupied = false;
+    let expectedOccupantId = null;
+    if (occupant && !occupant.isMine) {
+        const prompt = own
+            ? `Место ${position} занято ${occupant.name}. Поменяться местами?`
+            : `Место ${position} занято ${occupant.name}. Встать сюда и сдвинуть выступающих ниже на одно место?`;
+        const confirmed = typeof tg?.showConfirm === "function"
+            ? await new Promise(resolve => tg.showConfirm(prompt, resolve))
+            : window.confirm(prompt);
+        if (!confirmed) return;
+        confirmOccupied = true;
+        expectedOccupantId = occupant.presentationId;
+    }
+    await performAction({action: "save_student_presentation", lessonId, topic, position,
+        confirmOccupied, expectedOccupantId});
 }
 
 function renderPresentationQueue(queue, queueIndex) {
