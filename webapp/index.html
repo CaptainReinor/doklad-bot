@@ -392,6 +392,25 @@
             line-height: 1.5;
         }
 
+        .assignment-options { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
+        .assignment-options summary { cursor: pointer; font-weight: 650; }
+        .assignment-options summary span { display: block; margin: 3px 0 0 18px; color: var(--hint); font-size: 12px; font-weight: 400; }
+        .assignment-options-list { display: grid; gap: 7px; max-height: 380px; overflow-y: auto; margin-top: 12px; }
+        .assignment-option { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 10px; }
+        .assignment-option.mine { border-color: var(--green); }
+        .assignment-option > b { color: var(--button); }
+        .assignment-option > div { display: grid; min-width: 0; }
+        .assignment-option strong, .assignment-option span { overflow-wrap: anywhere; }
+        .assignment-option span { color: var(--hint); font-size: 12px; }
+        .assignment-option .btn { width: auto; }
+        .assignment-options-more { margin-top: 10px; }
+        .assignment-admin-choices { display: grid; gap: 8px; margin-top: 12px; }
+        .assignment-admin-choices > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; }
+        @media (max-width: 480px) {
+            .assignment-option { grid-template-columns: 30px minmax(0, 1fr); }
+            .assignment-option .btn { grid-column: 2; justify-self: start; }
+        }
+
         .schedule-card.today {
             border-color: var(--red);
             background: color-mix(in srgb, var(--red) 9%, var(--card-bg));

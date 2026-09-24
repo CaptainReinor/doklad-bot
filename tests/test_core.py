@@ -93,7 +93,7 @@ def test_v15_migration_restores_grouped_english_lessons(tmp_path):
     assert sum(item['group'] == 'МН-4-25-01' for item in english) == 5
     assert sum(item['group'] == 'МН-4-25-02' for item in english) == 5
     with db.connection() as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 15
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 17
 
 
 def test_v15_migration_replaces_gapped_ids_with_subject_scoped_numbers(tmp_path):
@@ -311,7 +311,7 @@ def test_v7_migration_preserves_cross_group_bookings_and_locks_topic(tmp_path):
     topic = next(item for item in db.get_topics(include_inactive=True) if item['id'] == 1)
     assert topic['is_common'] is True and topic['is_multi'] is False
     assert len(db.get_all_bookings()) == 2
-    assert sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0] == 15
+    assert sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0] == 17
 
 
 def test_db_location_does_not_follow_cwd(db, monkeypatch, tmp_path):
@@ -1024,8 +1024,8 @@ def test_resource_links_archives_and_report_deadline_reminder(service):
     sent = []
     check_notifications(service, lambda uid, message: sent.append((uid, message)),
                         now=datetime(2099, 12, 30, 12, 0))
-    assert sent == [(1, f'🔔 Срок сдачи завтра\nДоклад с материалами\n'
-                        f'📅 31.12.2099\n🔗 Материалы: {edited_url}')]
+    assert sent == [(1, f'Срок сдачи завтра\nДоклад с материалами\n'
+                        f'31.12.2099\nМатериалы: {edited_url}')]
     with pytest.raises(ActionError, match='HTTPS'):
         service.perform(ADMIN, {'action': 'create_assignment', 'subject': subject,
                                 'description': 'Неверная ссылка.', 'deadline': '31.12.2099',

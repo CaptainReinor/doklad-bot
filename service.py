@@ -375,6 +375,12 @@ class Service:
         result = {'user': self.public_profile(user), 'bookings': bookings,
                    'notifications': settings, 'participants': len({r['user_id'] for r in visible_rows}),
                    'isAdmin': is_admin,
+                   'assignmentOptions': [{
+                       'assignmentId': row['assignment_id'],
+                       'number': row['option_number'], 'title': row['title'],
+                       'student': row['student_name'], 'group': row['group_name'],
+                       'isMine': row['claimed_by'] == user_id and user is not None
+                   } for row in self.db.get_assignment_options()],
                    'announcements': announcements,
                    'studentPresentations': self.student_presentations(
                        user_id, lessons=queue_lessons),
@@ -502,7 +508,24 @@ class Service:
                 self.db.log_audit(user_id, 'cancel_booking', 'booking', booking_id,
                                   f"Снята бронь «{booking['topic']}» у {booking['booked_by']}")
                 return 'Бронирование снято.'
-            if action in ('create_assignment', 'update_assignment', 'delete_assignment'):
+            if action == 'admin_release_assignment_option':
+                if not self.is_admin(user_id):
+                    raise ActionError('Снять чужой выбор может только администратор.', 403)
+                assignment_id, number = data.get('assignmentId'), data.get('number')
+                if type(assignment_id) is not int or type(number) is not int:
+                    raise ActionError('Вариант не найден.')
+                option = next((row for row in self.db.get_assignment_options()
+                               if row['assignment_id'] == assignment_id
+                               and row['option_number'] == number), None)
+                if not option or not option['claimed_by']:
+                    raise ActionError('Вариант не занят.', 409)
+                self.db.release_assignment_option(assignment_id, number, user_id, admin=True,
+                                                  expected_user_id=option['claimed_by'])
+                self.db.log_audit(user_id, 'release', 'assignment_option', assignment_id,
+                                  f"Снят выбор № {number} у {option['student_name']}")
+                return 'Вариант освобождён.'
+            if action in ('create_assignment', 'update_assignment', 'delete_assignment',
+                          'attach_ses_options'):
                 if not self.is_admin(user_id):
                     raise ActionError('Управлять домашними заданиями может только администратор.', 403)
                 if action == 'create_assignment':
@@ -517,6 +540,12 @@ class Service:
                 assignment_id = data.get('assignmentId')
                 if type(assignment_id) is not int or not self.db.get_assignment(assignment_id):
                     raise ActionError('Домашнее задание не найдено.')
+                if action == 'attach_ses_options':
+                    changed = self.db.attach_ses_options(assignment_id)
+                    if changed:
+                        self.db.log_audit(user_id, 'attach', 'assignment_option', assignment_id,
+                                          'Добавлен список типов СЭС к домашнему заданию')
+                    return 'Список СЭС добавлен.' if changed else 'Список СЭС уже добавлен.'
                 if action == 'update_assignment':
                     subject = self._topic_subject(data.get('subject'))
                     description = clean_description(data.get('description'))
@@ -699,6 +728,22 @@ class Service:
                 return 'Профиль сохранён.'
             if not current:
                 raise ActionError('Сначала заполните профиль.', 403)
+            if action in ('choose_assignment_option', 'release_assignment_option'):
+                assignment_id, number = data.get('assignmentId'), data.get('number')
+                if type(assignment_id) is not int or type(number) is not int:
+                    raise ActionError('Выберите вариант из списка.')
+                assignment = self.db.get_assignment(assignment_id)
+                if not assignment or not any(
+                        row['assignment_id'] == assignment_id and row['option_number'] == number
+                        for row in self.db.get_assignment_options()):
+                    raise ActionError('Вариант не найден.')
+                if self._deadline_is_past(assignment['deadline']):
+                    raise ActionError('Срок выбора варианта прошёл.', 409)
+                if action == 'choose_assignment_option':
+                    changed = self.db.choose_assignment_option(assignment_id, number, user_id)
+                    return 'Вариант выбран.' if changed else 'Этот вариант уже выбран вами.'
+                changed = self.db.release_assignment_option(assignment_id, number, user_id)
+                return 'Вариант освобождён.' if changed else 'Вариант уже свободен.'
             if action in ('book_topic', 'cancel_topic'):
                 topic = self.find_topic(data.get('topicId'), include_inactive=True)
                 if not topic:
