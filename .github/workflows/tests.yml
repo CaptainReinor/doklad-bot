@@ -28,3 +28,6 @@ jobs:
         with:
           context: .
           push: false
+          load: true
+          tags: doklad-bot:test
+      - run: docker run --rm --entrypoint python doklad-bot:test -c "import database, service, server"
