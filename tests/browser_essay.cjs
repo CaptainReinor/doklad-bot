@@ -39,8 +39,7 @@ function initData(id) {
         assert.equal(await list.locator('.assignment-option').count(),20);
         await list.locator('.assignment-options-more').click();
         assert.equal(await list.locator('.assignment-option').count(),30);
-        await list.locator('.assignment-option').first().locator('.assignment-option-theses summary').click();
-        assert.match(await list.locator('.assignment-option').first().textContent(),/конструктивной трансформации/);
+        assert.equal(await list.locator('.assignment-option-theses').count(),0);
         await list.locator('.assignment-option').first().getByRole('button',{name:'Выбрать',exact:true}).click();
         await page.waitForFunction(()=>assignmentOptions.some(o=>o.isMine));
         assert.match(await list.locator(':scope > summary').textContent(),/№ 1/);
@@ -54,7 +53,7 @@ function initData(id) {
         assert.equal(await list.getByRole('button',{name:'Освободить',exact:true}).count(),0);
         assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
         assert.deepEqual(errors,[]);
-        console.log('Essay UI passed: collapsed 10/20/30, theses, choice, far/near/today/past, mobile layout');
+        console.log('Essay UI passed: collapsed 10/20/30, titles only, choice, far/near/today/past, mobile layout');
         await page.screenshot({path:process.env.TEST_SCREENSHOT || 'essay-ui.png',fullPage:true});
     } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

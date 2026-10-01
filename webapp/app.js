@@ -1216,8 +1216,7 @@ function renderAssignmentOptions(assignment) {
             <span>${free} свободно</span></summary>
         <div class="assignment-options-list">${options.slice(0, visibleCount).map(option => `<div class="assignment-option ${option.isMine ? "mine" : ""}">
             <b>${option.number}</b><div><strong>${escapeHtml(option.title)}</strong>
-                <span>${option.student ? `${escapeHtml(option.student)} · ${escapeHtml(option.group)}${option.isMine ? " (вы)" : ""}` : "Свободно"}</span>
-                ${option.details ? `<details class="assignment-option-theses"><summary>Подробнее</summary><p>${escapeHtml(option.details)}</p></details>` : ""}</div>
+                <span>${option.student ? `${escapeHtml(option.student)} · ${escapeHtml(option.group)}${option.isMine ? " (вы)" : ""}` : "Свободно"}</span></div>
             ${!assignment.archived && calendarTime(assignment.deadline) >= calendarTime(studyToday()) && isRegistered && (option.isMine || !option.student) ?
                 `<button class="btn ${option.isMine ? "btn-secondary" : "btn-outline"} btn-small"
                     onclick="${option.isMine ? "releaseAssignmentOption" : "chooseAssignmentOption"}(${assignment.id}, ${option.number})"
