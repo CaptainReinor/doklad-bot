@@ -377,7 +377,7 @@ class Service:
                    'isAdmin': is_admin,
                    'assignmentOptions': [{
                        'assignmentId': row['assignment_id'],
-                       'number': row['option_number'], 'title': row['title'],
+                       'number': row['option_number'], 'title': row['title'], 'details': row['details'],
                        'student': row['student_name'], 'group': row['group_name'],
                        'isMine': row['claimed_by'] == user_id and user is not None
                    } for row in self.db.get_assignment_options()],
@@ -525,7 +525,7 @@ class Service:
                                   f"Снят выбор № {number} у {option['student_name']}")
                 return 'Вариант освобождён.'
             if action in ('create_assignment', 'update_assignment', 'delete_assignment',
-                          'attach_ses_options'):
+                          'attach_ses_options', 'attach_essay_options'):
                 if not self.is_admin(user_id):
                     raise ActionError('Управлять домашними заданиями может только администратор.', 403)
                 if action == 'create_assignment':
@@ -540,12 +540,14 @@ class Service:
                 assignment_id = data.get('assignmentId')
                 if type(assignment_id) is not int or not self.db.get_assignment(assignment_id):
                     raise ActionError('Домашнее задание не найдено.')
-                if action == 'attach_ses_options':
-                    changed = self.db.attach_ses_options(assignment_id)
+                if action in ('attach_ses_options', 'attach_essay_options'):
+                    is_essay = action == 'attach_essay_options'
+                    changed = (self.db.attach_essay_options(assignment_id) if is_essay
+                               else self.db.attach_ses_options(assignment_id))
                     if changed:
                         self.db.log_audit(user_id, 'attach', 'assignment_option', assignment_id,
-                                          'Добавлен список типов СЭС к домашнему заданию')
-                    return 'Список СЭС добавлен.' if changed else 'Список СЭС уже добавлен.'
+                                          'Добавлен список тем эссе' if is_essay else 'Добавлен список типов СЭС')
+                    return 'Список добавлен.' if changed else 'Список уже добавлен.'
                 if action == 'update_assignment':
                     subject = self._topic_subject(data.get('subject'))
                     description = clean_description(data.get('description'))

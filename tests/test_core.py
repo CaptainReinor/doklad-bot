@@ -93,7 +93,7 @@ def test_v15_migration_restores_grouped_english_lessons(tmp_path):
     assert sum(item['group'] == 'МН-4-25-01' for item in english) == 5
     assert sum(item['group'] == 'МН-4-25-02' for item in english) == 5
     with db.connection() as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 17
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 18
 
 
 def test_v15_migration_replaces_gapped_ids_with_subject_scoped_numbers(tmp_path):
@@ -311,7 +311,7 @@ def test_v7_migration_preserves_cross_group_bookings_and_locks_topic(tmp_path):
     topic = next(item for item in db.get_topics(include_inactive=True) if item['id'] == 1)
     assert topic['is_common'] is True and topic['is_multi'] is False
     assert len(db.get_all_bookings()) == 2
-    assert sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0] == 17
+    assert sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0] == 18
 
 
 def test_db_location_does_not_follow_cwd(db, monkeypatch, tmp_path):

@@ -8,6 +8,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from catalog import NOTIFICATION_DEFAULTS, load_catalog
+from essay_assignment import OPTIONS as ESSAY_OPTIONS
+from essay_assignment import SUBJECT as ESSAY_SUBJECT
 from ses_assignment import OPTIONS as SES_OPTIONS
 from ses_assignment import SUBJECT as SES_SUBJECT
 from settings import APP_TIMEZONE, DATABASE_PATH, TOPIC_NOTIFICATION_BATCH_DELAY
@@ -207,6 +209,8 @@ class Database:
                 PRIMARY KEY(assignment_id, option_number),
                 FOREIGN KEY(assignment_id) REFERENCES assignments(id) ON DELETE CASCADE,
                 FOREIGN KEY(claimed_by) REFERENCES users(user_id) ON DELETE SET NULL)''')
+            if 'details' not in {r['name'] for r in conn.execute('PRAGMA table_info(assignment_options)')}:
+                conn.execute("ALTER TABLE assignment_options ADD COLUMN details TEXT NOT NULL DEFAULT ''")
             conn.execute('''CREATE UNIQUE INDEX IF NOT EXISTS idx_assignment_one_choice_per_student
                 ON assignment_options(assignment_id, claimed_by) WHERE claimed_by IS NOT NULL''')
             conn.execute('''CREATE TABLE IF NOT EXISTS topic_drafts (
@@ -317,7 +321,7 @@ class Database:
                                  (number, row['id']))
             conn.execute('''CREATE UNIQUE INDEX IF NOT EXISTS idx_topics_subject_number
                 ON topics(subject, display_number) WHERE deleted=0''')
-            conn.execute('PRAGMA user_version=17')
+            conn.execute('PRAGMA user_version=18')
 
     @staticmethod
     def _user(conn, user_id):
@@ -927,7 +931,7 @@ class Database:
     def get_assignment_options(self):
         with self.connection() as conn:
             return [dict(row) for row in conn.execute('''
-                SELECT o.assignment_id, o.option_number, o.title, o.claimed_by,
+                SELECT o.assignment_id, o.option_number, o.title, o.details, o.claimed_by,
                     CASE WHEN u.user_id IS NULL THEN ''
                          ELSE u.first_name || ' ' || u.last_name END AS student_name,
                     COALESCE(u.group_name, '') AS group_name
@@ -936,22 +940,26 @@ class Database:
                 ORDER BY o.assignment_id, o.option_number''')]
 
     def attach_ses_options(self, assignment_id):
+        return self._attach_assignment_options(
+            assignment_id, SES_SUBJECT, [(n, title, '') for n, title in SES_OPTIONS])
+
+    def attach_essay_options(self, assignment_id):
+        return self._attach_assignment_options(assignment_id, ESSAY_SUBJECT, ESSAY_OPTIONS)
+
+    def _attach_assignment_options(self, assignment_id, subject, options):
         with self.connection() as conn:
             conn.execute('BEGIN IMMEDIATE')
             assignment = self._assignment(conn, assignment_id)
             if not assignment:
                 raise ValueError('Домашнее задание не найдено.')
-            if assignment['subject'] != SES_SUBJECT:
-                raise ValueError('Список СЭС можно добавить только к заданию по устойчивому развитию.')
-            existing = conn.execute(
-                'SELECT DISTINCT assignment_id FROM assignment_options').fetchall()
-            if existing:
-                if len(existing) == 1 and existing[0]['assignment_id'] == assignment_id:
-                    return False
-                raise ValueError('Список СЭС уже прикреплён к другому заданию.')
+            if assignment['subject'] != subject:
+                raise ValueError('Этот список тем предназначен для другого предмета.')
+            if conn.execute('SELECT 1 FROM assignment_options WHERE assignment_id=? LIMIT 1',
+                            (assignment_id,)).fetchone():
+                return False
             conn.executemany('''INSERT INTO assignment_options
-                (assignment_id, option_number, title) VALUES (?, ?, ?)''',
-                [(assignment_id, number, title) for number, title in SES_OPTIONS])
+                (assignment_id, option_number, title, details) VALUES (?, ?, ?, ?)''',
+                [(assignment_id, number, title, details) for number, title, details in options])
             return True
 
     def choose_assignment_option(self, assignment_id, option_number, user_id):
@@ -1012,9 +1020,9 @@ class Database:
             assignment = self._assignment(conn, assignment_id)
             if not assignment:
                 raise ValueError('Домашнее задание не найдено.')
-            if subject != SES_SUBJECT and conn.execute('''SELECT 1 FROM assignment_options
+            if subject != assignment['subject'] and conn.execute('''SELECT 1 FROM assignment_options
                     WHERE assignment_id=? LIMIT 1''', (assignment_id,)).fetchone():
-                raise ValueError('Предмет задания со списком СЭС менять нельзя.')
+                raise ValueError('Предмет задания с выбранными темами менять нельзя.')
             if (assignment['subject'], assignment['description'], assignment['deadline'],
                     assignment['url']) == (subject, description, deadline, url):
                 return assignment

@@ -31,6 +31,22 @@ const SUBJECT_SHORT_NAMES = Object.freeze({
 });
 const ENGLISH_SUBJECT = "Иностранный язык профессиональных коммуникаций";
 const SES_SUBJECT = "Проектное управление устойчивым развитием организаций";
+const ESSAY_SUBJECT = "Развитие компетенций руководителя проекта и проектных команд";
+
+function assignmentChoiceLabel(assignment) {
+    return assignment.subject === SES_SUBJECT ? "Тип СЭС" : "Тема эссе";
+}
+
+function assignmentHubDetails(assignment) {
+    return assignmentOptions.some(option => option.assignmentId === assignment.id)
+        ? (assignment.subject === SES_SUBJECT ? "Практическое задание № 3 · выбор типа СЭС" : "Эссе · выбор темы")
+        : assignment.description;
+}
+
+function renderAssignmentHubOptions(assignmentId) {
+    const assignment = assignmentsData.find(item => item.id === assignmentId);
+    return assignment ? renderAssignmentOptions(assignment) : "";
+}
 
 function shortSubject(value) {
     if (!value) return "Без предмета";
@@ -354,8 +370,7 @@ function nearestEvents() {
         const when = calendarTime(item.deadline, "23.59");
         if (calendarTime(item.deadline) > start && when <= end) events.push({
             kind: "Домашка", title: item.subject,
-            dateLabel: item.deadline, details: assignmentOptions.some(option => option.assignmentId === item.id)
-                ? "Практическое задание № 3 · выбор типа СЭС" : item.description,
+            dateLabel: item.deadline, details: assignmentHubDetails(item),
             assignmentId: item.id, when, url: item.url || ""
         });
     });
@@ -376,8 +391,7 @@ function todayDeadlineEvents() {
         .filter(item => !item.archived && item.deadline === today)
         .map(item => ({
             kind: "Домашка", title: item.subject,
-            details: assignmentOptions.some(option => option.assignmentId === item.id)
-                ? "Практическое задание № 3 · выбор типа СЭС" : item.description,
+            details: assignmentHubDetails(item),
             assignmentId: item.id, url: item.url || ""
         }));
     const myTopicIds = new Set(myBookings.map(item => item.id));
@@ -398,8 +412,6 @@ function renderToday() {
     const deadlines = todayDeadlineEvents();
     const announcements = announcementsData.slice(0, 3);
     const nearest = nearestEvents();
-    const sesAssignments = assignmentsData.filter(item => !item.archived &&
-        assignmentOptions.some(option => option.assignmentId === item.id));
     const nearestLessonIds = new Set(nearest.map(item => item.lessonId).filter(Boolean));
     const additionalPresentationLessons = studentPresentations.filter(item =>
         item.date !== today && !nearestLessonIds.has(item.lessonId));
@@ -415,21 +427,15 @@ function renderToday() {
             ${deadlines.map(item => `<article class="hub-card today-deadline">
                 <div class="hub-card-top"><strong>${escapeHtml(item.kind)}</strong><span>Срок сегодня</span></div>
                 <h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.details)}</p>
-                ${resourceButton(item.url, "Открыть материалы")}${assignmentOptions.some(option => option.assignmentId === item.assignmentId)
-                    ? `<button class="btn btn-outline" onclick="openAssignmentOptions(${item.assignmentId})">Открыть задание</button>` : ""}</article>`).join("")}</div></section>` : "";
+                ${resourceButton(item.url, "Открыть материалы")}${renderAssignmentHubOptions(item.assignmentId)}</article>`).join("")}</div></section>` : "";
     const queueSection = presentationQueues.length ? `<section class="hub-section"><h3>Очередь докладов</h3>
         <div class="hub-list">${presentationQueues.map((queue, queueIndex) => renderPresentationQueue(queue, queueIndex)).join("")}</div></section>` : "";
-    const sesSection = sesAssignments.length ? `<section class="hub-section"><h3>Выбор СЭС</h3>
-        <div class="hub-list">${sesAssignments.map(item => `<article class="hub-card">
-            <div class="hub-card-top"><strong>Практическое задание № 3</strong><span>Срок: ${escapeHtml(item.deadline)}</span></div>
-            ${renderAssignmentOptions(item)}</article>`).join("")}</div></section>` : "";
     const nearestSection = `<section class="hub-section"><h3>Ближайшее</h3>
         <div class="hub-list">${nearest.length ? nearest.map(item => `<article class="hub-card nearby-item">
             <div class="hub-card-top"><strong>${escapeHtml(item.kind)}</strong><span>${escapeHtml(item.dateLabel)}</span></div>
             <h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.details)}</p>${resourceButton(
                 item.url, item.kind === "Пара" ? "Ссылка на пару" : "Открыть материалы")}
-            ${assignmentOptions.some(option => option.assignmentId === item.assignmentId)
-                ? `<button class="btn btn-outline" onclick="openAssignmentOptions(${item.assignmentId})">Открыть задание</button>` : ""}
+            ${renderAssignmentHubOptions(item.assignmentId)}
             ${item.lessonId ? renderStudentPresentationQueue(item.lessonId) : ""}
         </article>`).join("") : '<div class="empty-state compact">На ближайшие семь дней событий нет.</div>'}</div></section>`;
     const additionalPresentationsSection = additionalPresentationLessons.length ? `<section class="hub-section">
@@ -437,7 +443,7 @@ function renderToday() {
             <div class="hub-card-top"><strong>${escapeHtml(item.subject)}</strong><span>${escapeHtml(item.date)} · ${escapeHtml(item.time)}</span></div>
             <p>${escapeHtml([item.teacher, item.room].filter(Boolean).join(" · "))}</p>
             ${renderStudentPresentationQueue(item.lessonId)}</article>`).join("")}</div></section>` : "";
-    container.innerHTML = `${announcementSection}${lessonSection}${queueSection}${sesSection}${nearestSection}${additionalPresentationsSection}`;
+    container.innerHTML = `${announcementSection}${lessonSection}${queueSection}${nearestSection}${additionalPresentationsSection}`;
 }
 
 function renderStudentPresentationQueue(lessonId) {
@@ -1206,12 +1212,13 @@ function renderAssignmentOptions(assignment) {
         visibleAssignmentOptionCounts.get(assignment.id) || 10));
     return `<details class="assignment-options" ${openAssignmentOptionLists.has(assignment.id) ? "open" : ""}
         ontoggle="setAssignmentOptionsOpen(${assignment.id}, this.open)">
-        <summary>Тип СЭС: ${mine ? `№ ${mine.number} · ${escapeHtml(mine.title)}` : "выберите вариант"}
+        <summary>${assignmentChoiceLabel(assignment)}: ${mine ? `№ ${mine.number} · ${escapeHtml(mine.title)}` : "выберите вариант"}
             <span>${free} свободно</span></summary>
         <div class="assignment-options-list">${options.slice(0, visibleCount).map(option => `<div class="assignment-option ${option.isMine ? "mine" : ""}">
             <b>${option.number}</b><div><strong>${escapeHtml(option.title)}</strong>
-                <span>${option.student ? `${escapeHtml(option.student)} · ${escapeHtml(option.group)}${option.isMine ? " (вы)" : ""}` : "Свободно"}</span></div>
-            ${!assignment.archived && isRegistered && (option.isMine || !option.student) ?
+                <span>${option.student ? `${escapeHtml(option.student)} · ${escapeHtml(option.group)}${option.isMine ? " (вы)" : ""}` : "Свободно"}</span>
+                ${option.details ? `<details class="assignment-option-theses"><summary>Подробнее</summary><p>${escapeHtml(option.details)}</p></details>` : ""}</div>
+            ${!assignment.archived && calendarTime(assignment.deadline) >= calendarTime(studyToday()) && isRegistered && (option.isMine || !option.student) ?
                 `<button class="btn ${option.isMine ? "btn-secondary" : "btn-outline"} btn-small"
                     onclick="${option.isMine ? "releaseAssignmentOption" : "chooseAssignmentOption"}(${assignment.id}, ${option.number})"
                     ${busy || !connected ? "disabled" : ""}>${option.isMine ? "Освободить" : mine ? "Сменить" : "Выбрать"}</button>` : ""}
@@ -1246,6 +1253,10 @@ async function adminReleaseAssignmentOption(assignmentId, number) {
     if (await performAction({action: "admin_release_assignment_option", assignmentId, number})) {
         renderHomeworkEditor();
     }
+}
+
+async function attachEssayOptions(assignmentId) {
+    if (await performAction({action: "attach_essay_options", assignmentId})) renderHomeworkEditor();
 }
 
 async function attachSesOptions(assignmentId) {
@@ -1371,8 +1382,10 @@ function renderHomeworkEditor() {
             <input class="form-control" type="url" id="assignment-url-${item.id}" maxlength="1000" placeholder="https://..." value="${escapeHtml(item.url || "")}">
             <label class="form-label" for="assignment-file-${item.id}">Заменить ссылку прикреплённым файлом</label>
             <input class="form-control file-control" type="file" id="assignment-file-${item.id}" accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.odt,.ods,.txt,.png,.jpg,.jpeg,.zip">
-            ${item.subject === SES_SUBJECT && !assignmentOptions.length ? `<button class="btn btn-outline"
+            ${item.subject === SES_SUBJECT && !assignmentOptions.some(option => option.assignmentId === item.id) ? `<button class="btn btn-outline"
                 onclick="attachSesOptions(${item.id})">Добавить список типов СЭС</button>` : ""}
+            ${item.subject === ESSAY_SUBJECT && !assignmentOptions.some(option => option.assignmentId === item.id) ? `<button class="btn btn-outline"
+                onclick="attachEssayOptions(${item.id})">Добавить 30 тем эссе</button>` : ""}
             ${assignmentOptions.some(option => option.assignmentId === item.id) ? `<div class="assignment-admin-choices">
                 <strong>Выбранные варианты</strong>${assignmentOptions.filter(option =>
                     option.assignmentId === item.id && option.student).map(option => `<div>
