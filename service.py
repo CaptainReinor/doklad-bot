@@ -450,12 +450,15 @@ class Service:
                 if not self.is_admin(user_id):
                     raise ActionError('Менять порядок выступающих может только администратор.', 403)
                 lesson_id = data.get('lessonId')
-                fields = ('firstId', 'secondId', 'firstPosition', 'secondPosition')
+                fields = ('firstId', 'firstPosition', 'secondPosition')
                 if type(lesson_id) is not int or any(
                         type(data.get(field)) is not int or data[field] < 1 for field in fields):
-                    raise ActionError('Выберите двух выступающих.')
-                if data['firstId'] == data['secondId']:
-                    raise ActionError('Выберите разных выступающих.')
+                    raise ActionError('Выберите выступающего и новое место.')
+                second_id = data.get('secondId')
+                if second_id is not None and (type(second_id) is not int or second_id < 1):
+                    raise ActionError('Обновите список и выберите место снова.', 409)
+                if data['firstId'] == second_id or data['firstPosition'] == data['secondPosition']:
+                    raise ActionError('Выберите другое место.')
                 lesson = next((item for item in self.visible_lessons(user_id)
                                if item['id'] == lesson_id and
                                item['subject'] == 'Управление бизнес-процессами' and
@@ -464,10 +467,14 @@ class Service:
                     raise ActionError('Пара не найдена.')
                 if datetime.now(ZoneInfo(APP_TIMEZONE)) >= self._student_presentation_end(lesson):
                     raise ActionError('Пара уже закончилась.', 409)
-                self.db.swap_student_presentations(
-                    lesson_id, data['firstId'], data['secondId'],
+                entries = self.db.get_student_presentations([lesson_id])
+                slot_count = max(20, max((item['position'] for item in entries), default=0) + 1)
+                if data['secondPosition'] > slot_count:
+                    raise ActionError('Выберите место из списка.')
+                self.db.move_student_presentation(
+                    lesson_id, data['firstId'], second_id,
                     data['firstPosition'], data['secondPosition'], actor_id=user_id)
-                return 'Выступающие поменялись местами.'
+                return 'Выступающие поменялись местами.' if second_id else 'Место выступающего изменено.'
             if action == 'save_student_presentation':
                 if not current:
                     raise ActionError('Сначала заполните профиль.', 403)

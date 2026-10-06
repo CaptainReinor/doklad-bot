@@ -612,6 +612,41 @@ def test_admin_swap_rejects_unauthorized_or_invalid_changes(service, business_pr
     assert service.db.get_student_presentations([business_presentations['lessonId']]) == before
 
 
+def test_admin_moves_to_empty_place_leaving_other_students_unchanged(service, business_presentations):
+    payload = {**business_presentations, 'secondId': None, 'secondPosition': 7}
+    service.perform(ADMIN, payload)
+    entries = service.db.get_student_presentations([payload['lessonId']])
+    assert {r['user_id']: (r['position'], r['topic']) for r in entries} == {
+        1: (7, 'Тема выступления 1'), 2: (10, 'Тема выступления 2')}
+    assert service.db.get_audit_log()[0]['action'] == 'move'
+    assert service.db.claim_notifications() == []
+    # Empty-to-empty moves work even with just one participant.
+    with service.db.connection() as conn:
+        conn.execute('DELETE FROM student_presentations WHERE user_id=2')
+    service.perform(ADMIN, {**payload, 'firstPosition': 7, 'secondPosition': 20})
+    assert service.db.get_student_presentations([payload['lessonId']])[0]['position'] == 20
+
+
+def test_admin_cannot_overwrite_new_occupant_of_previously_empty_place(service, business_presentations):
+    payload = {**business_presentations, 'secondId': None, 'secondPosition': 7}
+    register(service, 3)
+    service.perform(3, {'action': 'save_student_presentation', 'lessonId': payload['lessonId'],
+                        'position': 7, 'topic': 'Новая тема выступления'})
+    before = service.db.get_student_presentations([payload['lessonId']])
+    with pytest.raises(ActionError) as stale:
+        service.perform(ADMIN, payload)
+    assert stale.value.status == 409
+    assert service.db.get_student_presentations([payload['lessonId']]) == before
+
+
+@pytest.mark.parametrize('position', [0, True, '7', 999999])
+def test_admin_move_rejects_invalid_destination(service, business_presentations, position):
+    before = service.db.get_student_presentations([business_presentations['lessonId']])
+    with pytest.raises(ActionError):
+        service.perform(ADMIN, {**business_presentations, 'secondId': None, 'secondPosition': position})
+    assert service.db.get_student_presentations([business_presentations['lessonId']]) == before
+
+
 def test_homework_is_common_admin_only_and_uses_active_schedule_subjects(service):
     register(service, 1, group='МН-4-25-01')
     register(service, 2, group='МН-4-25-02')

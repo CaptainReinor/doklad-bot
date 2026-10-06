@@ -850,26 +850,29 @@ class Database:
                 WHERE p.lesson_id IN ({placeholders})
                 ORDER BY p.lesson_id, p.position''', lesson_ids)]
 
-    def swap_student_presentations(self, lesson_id, first_id, second_id,
-                                   first_position, second_position, *, actor_id):
+    def move_student_presentation(self, lesson_id, first_id, second_id,
+                                  first_position, second_position, *, actor_id):
         with self.connection() as conn:
             conn.execute('BEGIN IMMEDIATE')
-            rows = list(conn.execute('''SELECT id, position FROM student_presentations
-                WHERE lesson_id=? AND id IN (?, ?)''', (lesson_id, first_id, second_id)))
-            positions = {row['id']: row['position'] for row in rows}
-            if (first_id == second_id or len(rows) != 2 or
-                    positions.get(first_id) != first_position or positions.get(second_id) != second_position):
-                raise BookingConflict('Список изменился. Обновите его и выберите выступающих снова.')
+            first = conn.execute('''SELECT position FROM student_presentations
+                WHERE lesson_id=? AND id=?''', (lesson_id, first_id)).fetchone()
+            target = conn.execute('''SELECT id FROM student_presentations
+                WHERE lesson_id=? AND position=?''', (lesson_id, second_position)).fetchone()
+            actual_second_id = target['id'] if target else None
+            if (not first or first['position'] != first_position or actual_second_id != second_id or
+                    first_id == second_id or first_position == second_position):
+                raise BookingConflict('Список изменился. Обновите его и выберите место снова.')
             now = timestamp()
             conn.execute('UPDATE student_presentations SET position=0 WHERE id=?', (first_id,))
-            conn.execute('UPDATE student_presentations SET position=?, updated_at=? WHERE id=?',
-                         (first_position, now, second_id))
+            if second_id is not None:
+                conn.execute('UPDATE student_presentations SET position=?, updated_at=? WHERE id=?',
+                             (first_position, now, second_id))
             conn.execute('UPDATE student_presentations SET position=?, updated_at=? WHERE id=?',
                          (second_position, now, first_id))
             conn.execute('''INSERT INTO audit_log
                 (actor_id, action, entity_type, entity_id, summary, created_at)
-                VALUES (?, 'swap', 'student_presentation', ?, ?, ?)''',
-                         (actor_id, lesson_id,
+                VALUES (?, ?, 'student_presentation', ?, ?, ?)''',
+                         (actor_id, 'swap' if second_id else 'move', lesson_id,
                           f'Изменён порядок выступлений: места {first_position} и {second_position}.', now))
             conn.execute('''DELETE FROM audit_log WHERE id NOT IN
                 (SELECT id FROM audit_log ORDER BY id DESC LIMIT 300)''')

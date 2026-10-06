@@ -481,16 +481,22 @@ function renderStudentPresentationQueue(lessonId) {
     const remainingPlaces = placeCount - visibleCount;
     const swapOptions = selected => entries.map(entry => `<option value="${entry.presentationId}"
         ${entry.presentationId === selected ? "selected" : ""}>${entry.position} — ${escapeHtml(entry.name)}</option>`).join("");
-    const adminSwap = isAdmin && queue.canSwap && queue.editable && entries.length > 1
+    const moveOptions = Array.from({length: queue.slotCount}, (_, index) => {
+        const position = index + 1;
+        const entry = occupied.get(position);
+        return `<option value="${position}" ${position === selectedPosition ? "selected" : ""}>
+            ${position} — ${escapeHtml(entry ? entry.name : "Свободно")}</option>`;
+    }).join("");
+    const adminSwap = isAdmin && queue.canSwap && queue.editable && entries.length > 0
         ? `<details class="student-presentation-admin"><summary>Изменить порядок</summary>
             <div class="student-presentation-form">
-                <label class="form-label" for="presentation-swap-first-${lessonId}">Первый выступающий</label>
+                <label class="form-label" for="presentation-swap-first-${lessonId}">Выступающий</label>
                 <select class="form-control" id="presentation-swap-first-${lessonId}">${swapOptions(entries[0].presentationId)}</select>
-                <label class="form-label" for="presentation-swap-second-${lessonId}">Второй выступающий</label>
+                <label class="form-label" for="presentation-swap-second-${lessonId}">Новое место</label>
                 <select class="form-control" id="presentation-swap-second-${lessonId}">
-                    ${swapOptions(entries[1].presentationId)}</select>
+                    ${moveOptions}</select>
                 <button class="btn btn-outline" ${busy || !connected ? "disabled" : ""}
-                    onclick="swapStudentPresentations(${lessonId})">Поменять местами</button>
+                    onclick="swapStudentPresentations(${lessonId})">Переместить</button>
             </div></details>` : "";
     return `<details class="student-presentation" ${openStudentPresentationQueues.has(lessonId) ? "open" : ""}
         ontoggle="setStudentPresentationOpen(${lessonId}, this.open)">
@@ -514,19 +520,21 @@ async function swapStudentPresentations(lessonId) {
     const queue = studentPresentations.find(item => item.lessonId === lessonId);
     if (!isAdmin || !queue?.canSwap || !queue.editable) return;
     const firstId = Number(document.getElementById(`presentation-swap-first-${lessonId}`)?.value);
-    const secondId = Number(document.getElementById(`presentation-swap-second-${lessonId}`)?.value);
+    const secondPosition = Number(document.getElementById(`presentation-swap-second-${lessonId}`)?.value);
     const first = queue.entries.find(entry => entry.presentationId === firstId);
-    const second = queue.entries.find(entry => entry.presentationId === secondId);
-    if (!first || !second || firstId === secondId) {
-        showStatus("Выберите двух разных выступающих");
+    const second = queue.entries.find(entry => entry.position === secondPosition);
+    if (!first || !Number.isInteger(secondPosition) || secondPosition < 1 || first.position === secondPosition) {
+        showStatus("Выберите выступающего и другое место");
         return;
     }
-    const prompt = `Поменять местами ${first.name} (место ${first.position}) и ${second.name} (место ${second.position})?`;
+    const prompt = second
+        ? `Поменять местами ${first.name} (место ${first.position}) и ${second.name} (место ${second.position})?`
+        : `Переместить ${first.name} с места ${first.position} на свободное место ${secondPosition}?`;
     const confirmed = typeof tg?.showConfirm === "function"
         ? await new Promise(resolve => tg.showConfirm(prompt, resolve)) : window.confirm(prompt);
     if (!confirmed) return;
-    await performAction({action: "admin_swap_student_presentations", lessonId, firstId, secondId,
-        firstPosition: first.position, secondPosition: second.position});
+    await performAction({action: "admin_swap_student_presentations", lessonId, firstId,
+        secondId: second?.presentationId || null, firstPosition: first.position, secondPosition});
 }
 
 function setStudentPresentationOpen(lessonId, isOpen) {

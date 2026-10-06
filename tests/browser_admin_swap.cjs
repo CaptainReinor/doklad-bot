@@ -57,13 +57,30 @@ function auth(id) {
         const original = await admin.evaluate(id=>studentPresentations.find(q=>q.lessonId===id).entries, lessonId);
         const payload = {action:'admin_swap_student_presentations',lessonId,
             firstId:original[0].presentationId, secondId:original[1].presentationId, firstPosition:1, secondPosition:10};
-        await queue.getByRole('button',{name:'Поменять местами',exact:true}).click();
+        await queue.locator(`#presentation-swap-second-${lessonId}`).selectOption('10');
+        await queue.getByRole('button',{name:'Переместить',exact:true}).click();
         await admin.waitForFunction(id=>!busy && studentPresentations.find(q=>q.lessonId===id).entries.find(e=>e.position===1).topic==='Тестовая тема 102',lessonId);
         await student.evaluate(()=>refreshState());
         const entries = await student.evaluate(id=>studentPresentations.find(q=>q.lessonId===id).entries,lessonId);
         assert.deepEqual(entries.map(e=>[e.position,e.topic]),[[1,'Тестовая тема 102'],[10,'Тестовая тема 101']]);
         await action(900,payload,409);
         await action(101,payload,403);
+        // Free positions are available to the admin, including when moving someone else.
+        await queue.locator('.student-presentation-admin > summary').click();
+        assert.match(await queue.locator(`#presentation-swap-second-${lessonId} option[value="7"]`).textContent(), /Свободно/);
+        await queue.locator(`#presentation-swap-second-${lessonId}`).selectOption('7');
+        await queue.getByRole('button',{name:'Переместить',exact:true}).click();
+        await admin.waitForFunction(id=>!busy && studentPresentations.find(q=>q.lessonId===id).entries.find(e=>e.position===7)?.topic==='Тестовая тема 102',lessonId);
+        await student.evaluate(()=>refreshState());
+        assert.deepEqual(await student.evaluate(id=>studentPresentations.find(q=>q.lessonId===id).entries.map(e=>[e.position,e.topic]),lessonId),
+            [[7,'Тестовая тема 102'],[10,'Тестовая тема 101']]);
+        await admin.evaluate(id=>{
+            const queue=studentPresentations.find(q=>q.lessonId===id);
+            queue.entries=queue.entries.slice(0,1);
+            renderToday();
+        },lessonId);
+        assert.equal(await admin.locator(`#presentation-swap-first-${lessonId} option`).count(),1);
+        assert.equal(await admin.locator(`#presentation-swap-second-${lessonId} option`).count(),20);
         await admin.evaluate(id=>{
             studentPresentations.find(q=>q.lessonId===id).editable=false;
             renderToday();
@@ -71,6 +88,6 @@ function auth(id) {
         assert.equal(await admin.locator(`#student-presentation-topic-${lessonId}`).count(),0);
         assert.equal(await admin.locator(`#presentation-swap-first-${lessonId}`).count(),0);
         assert.deepEqual(errors,[]);
-        console.log('Passed: four notification settings; admin-only swap; student synchronization; stale/unauthorized requests rejected; finished-lesson forms hidden.');
+        console.log('Passed: admin swap and move to a free position; student synchronization; one-participant form; stale/unauthorized requests rejected; finished-lesson forms hidden.');
     } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});
