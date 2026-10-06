@@ -413,7 +413,8 @@ async function main() {
         checks.push('Registration locks navigation until a valid profile is saved and survives reload');
 
         await b.evaluate(() => switchTab('notifications'));
-        assert.equal(await b.locator('.notification-item').count(), 5);
+        assert.equal(await b.locator('.notification-item').count(), 4);
+        assert.equal(await b.locator('.notification-item').filter({hasText:'Изменения расписания'}).count(), 0);
         assert.equal(await b.locator('.notification-item').filter({hasText:'Общий список бронирований'}).count(), 0);
         assert.match(await b.locator('.notification-item').filter({hasText:'Темы докладов'}).textContent(),
             /Новые темы, изменения старых, напоминание за день до сдачи/);
@@ -428,7 +429,7 @@ async function main() {
         await b.evaluate(() => switchTab('notifications'));
         assert.equal(await b.getByRole('checkbox', {name:'Домашние задания', exact:true}).isChecked(), false);
         assert.equal(await b.getByRole('checkbox', {name:'Напоминания о парах', exact:true}).isChecked(), true);
-        checks.push('Five independent notification preferences are shown and survive reload');
+        checks.push('Four independent notification preferences are shown and survive reload');
 
         const preview = await pageFor(null, 320);
         await preview.evaluate(() => switchTab('reports'));

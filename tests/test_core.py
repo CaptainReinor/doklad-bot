@@ -425,10 +425,10 @@ def test_topic_additions_and_edits_are_group_scoped_and_batched(service):
     assert 'Изменены темы докладов: 2' in sent[0][1]
 
 
-def test_five_notification_toggles_and_homework_edits_are_silent(service):
+def test_four_notification_toggles_and_homework_edits_are_silent(service):
     register(service)
     assert service.db.get_notification_settings(1) == {
-        'assignments': True, 'topics': True, 'schedule': True,
+        'assignments': True, 'topics': True,
         'announcements': True, 'lessons': False}
     with pytest.raises(ValueError):
         service.db.set_notification(1, 'queue', True)
@@ -506,14 +506,110 @@ def test_english_lesson_reminders_follow_the_students_group(service):
     assert 'english-02' in sent[2] and 'english-01' not in sent[2]
 
 
-def test_schedule_change_notification_only_after_change(db):
+def test_legacy_schedule_notifications_are_removed_without_affecting_other_kinds(db):
     db.save_user(1, 'Иван', 'Иванов', 'МН-4-25-01')
-    db.set_notification(1, 'schedule', True)
-    db.observe_schedule('one')
-    db.observe_schedule('one')
-    assert db.claim_notifications() == []
-    db.observe_schedule('two')
-    assert len(db.claim_notifications()) == 1
+    with db.connection() as conn:
+        conn.execute("INSERT INTO notification_settings VALUES (1, 'schedule', 1)")
+        conn.execute("INSERT INTO app_meta VALUES ('schedule_hash', 'old')")
+        conn.execute('''INSERT INTO notification_jobs
+            (event_key, user_id, kind, message, claimed_at) VALUES ('old-schedule', 1, 'schedule', 'Old notice', ?)''',
+                     (time.time(),))
+    db.enqueue_notification('assignments', 'Homework', 'homework')
+    db.init()
+    db.init()
+    assert 'schedule' not in db.get_notification_settings(1)
+    with pytest.raises(ValueError):
+        db.set_notification(1, 'schedule', True)
+    with db.connection() as conn:
+        assert conn.execute("SELECT * FROM notification_settings WHERE kind='schedule'").fetchall() == []
+        assert conn.execute("SELECT * FROM app_meta WHERE key='schedule_hash'").fetchall() == []
+        old = conn.execute("SELECT * FROM notification_jobs WHERE event_key='old-schedule'").fetchone()
+        assert old['sent_at'] is not None and old['claimed_at'] is None
+    db.enqueue_notification('schedule', 'Removed notice', 'removed-schedule')
+    assert [job['kind'] for job in db.claim_notifications()] == ['assignments']
+
+
+def test_schedule_changes_do_not_send_notifications(service):
+    register(service)
+    sent = []
+    now = datetime(2026, 9, 5, 10, 0)
+    check_notifications(service, lambda uid, text: sent.append((uid, text)), now=now)
+    lesson = service.catalog()['schedule'][0]
+    service.perform(ADMIN, {'action': 'update_lesson', 'lessonId': lesson['id'],
+                            'date': lesson['date'], 'time': lesson['time'], 'type': lesson['type'],
+                            'subject': lesson['subject'], 'teacher': 'Другой преподаватель',
+                            'room': lesson['room'], 'group': lesson['group'], 'url': ''})
+    check_notifications(service, lambda uid, text: sent.append((uid, text)), now=now)
+    assert sent == []
+    assert service.db.claim_notifications() == []
+
+
+@pytest.fixture
+def business_presentations(service):
+    register(service, 1)
+    register(service, 2)
+    service.perform(ADMIN, {'action': 'create_lesson', 'date': '15.09.2026',
+                            'time': '18:30-21:20', 'type': 'ПЗ',
+                            'subject': 'Управление бизнес-процессами',
+                            'teacher': 'Золотухин И.В.', 'room': 'СДО', 'group': ''})
+    lesson = next(item for item in service.catalog()['schedule']
+                  if item['date'] == '15.09.2026' and item['subject'] == 'Управление бизнес-процессами')
+    for user, position in [(1, 1), (2, 10)]:
+        service.perform(user, {'action': 'save_student_presentation', 'lessonId': lesson['id'],
+                              'position': position, 'topic': f'Тема выступления {user}'})
+    entries = service.db.get_student_presentations([lesson['id']])
+    return {'action': 'admin_swap_student_presentations', 'lessonId': lesson['id'],
+            'firstId': entries[0]['presentation_id'], 'secondId': entries[1]['presentation_id'],
+            'firstPosition': 1, 'secondPosition': 10}
+
+
+def test_admin_swaps_two_students_preserving_topics_and_saving_audit(service, business_presentations):
+    payload = business_presentations
+    before = service.db.get_student_presentations([payload['lessonId']])
+    assert next(q for q in service.student_presentations(ADMIN)
+                if q['lessonId'] == payload['lessonId'])['canSwap'] is True
+    assert next(q for q in service.student_presentations(1)
+                if q['lessonId'] == payload['lessonId'])['canSwap'] is False
+    service.perform(ADMIN, payload)
+    after = service.db.get_student_presentations([payload['lessonId']])
+    assert {r['user_id']: r['position'] for r in after} == {1: 10, 2: 1}
+    assert {r['user_id']: r['topic'] for r in after} == {r['user_id']: r['topic'] for r in before}
+    assert service.db.get_audit_log()[0]['action'] == 'swap'
+    assert service.db.claim_notifications() == []
+    # A second administrator working from the previous list cannot silently undo the swap.
+    with pytest.raises(ActionError) as stale:
+        service.perform(ADMIN, payload)
+    assert stale.value.status == 409
+    assert service.db.get_student_presentations([payload['lessonId']]) == after
+
+
+@pytest.mark.parametrize('case', ['student', 'same', 'missing', 'other_lesson', 'ended', 'other_subject'])
+def test_admin_swap_rejects_unauthorized_or_invalid_changes(service, business_presentations, case):
+    payload = dict(business_presentations)
+    actor = ADMIN
+    if case == 'student':
+        actor = 1
+    elif case == 'same':
+        payload['secondId'] = payload['firstId']
+    elif case == 'missing':
+        payload['secondId'] = 99999
+    elif case == 'other_lesson':
+        service.perform(ADMIN, {'action': 'create_lesson', 'date': '16.09.2026',
+                                'time': '18:30-21:20', 'type': 'ПЗ',
+                                'subject': 'Управление бизнес-процессами',
+                                'teacher': 'Золотухин И.В.', 'room': 'СДО', 'group': ''})
+        payload['lessonId'] = max(item['id'] for item in service.catalog()['schedule'])
+    elif case == 'ended':
+        with service.db.connection() as conn:
+            conn.execute("UPDATE lessons SET lesson_date='13.09.2026' WHERE id=?", (payload['lessonId'],))
+    elif case == 'other_subject':
+        with service.db.connection() as conn:
+            conn.execute("UPDATE lessons SET subject='Методы реализации научно-исследовательских проектов' WHERE id=?",
+                         (payload['lessonId'],))
+    before = service.db.get_student_presentations([business_presentations['lessonId']])
+    with pytest.raises(ActionError):
+        service.perform(actor, payload)
+    assert service.db.get_student_presentations([business_presentations['lessonId']]) == before
 
 
 def test_homework_is_common_admin_only_and_uses_active_schedule_subjects(service):
@@ -550,10 +646,10 @@ def test_homework_is_common_admin_only_and_uses_active_schedule_subjects(service
 
 
 def test_multiple_admins_can_manage_topics(db):
-    service = Service(db, admin_ids={ADMIN, 842525310})
-    service.perform(842525310, {'action': 'create_topic', 'title': 'Тема второго администратора',
+    service = Service(db, admin_ids={ADMIN, 901})
+    service.perform(901, {'action': 'create_topic', 'title': 'Тема второго администратора',
                                 'subject': 'Управление бизнес-процессами'})
-    assert service.state(842525310)['isAdmin'] is True
+    assert service.state(901)['isAdmin'] is True
     created = next(item for item in service.catalog()['topics']
                    if item['title'] == 'Тема второго администратора')
     assert created['subject'] == 'Управление бизнес-процессами'
@@ -820,7 +916,7 @@ def test_aggregate_admin_stats_counts_sessions_and_notification_preferences(clie
     preferences = {item['kind']: item for item in stats['notifications']}
     assert preferences['assignments'] == {'kind': 'assignments', 'enabled': 1, 'percent': 50}
     assert preferences['topics']['enabled'] == 2
-    assert preferences['schedule']['enabled'] == 2
+    assert 'schedule' not in preferences
     assert preferences['announcements']['enabled'] == 2
     assert preferences['lessons'] == {'kind': 'lessons', 'enabled': 1, 'percent': 50}
     assert 'adminStats' in service.state(ADMIN)

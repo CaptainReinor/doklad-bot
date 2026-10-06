@@ -330,6 +330,7 @@ class Service:
                 'entries': entries,
                 'slotCount': max(20, max((item['position'] for item in entries), default=0) + 1),
                 'editable': now < self._student_presentation_end(lesson),
+                'canSwap': self.is_admin(user_id) and lesson['subject'] == 'Управление бизнес-процессами',
             })
         return result
 
@@ -445,6 +446,28 @@ class Service:
                 self.db.log_audit(user_id, 'delete', 'announcement', announcement_id,
                                   f"Удалено объявление: {existing['title']}")
                 return 'Объявление удалено.'
+            if action == 'admin_swap_student_presentations':
+                if not self.is_admin(user_id):
+                    raise ActionError('Менять порядок выступающих может только администратор.', 403)
+                lesson_id = data.get('lessonId')
+                fields = ('firstId', 'secondId', 'firstPosition', 'secondPosition')
+                if type(lesson_id) is not int or any(
+                        type(data.get(field)) is not int or data[field] < 1 for field in fields):
+                    raise ActionError('Выберите двух выступающих.')
+                if data['firstId'] == data['secondId']:
+                    raise ActionError('Выберите разных выступающих.')
+                lesson = next((item for item in self.visible_lessons(user_id)
+                               if item['id'] == lesson_id and
+                               item['subject'] == 'Управление бизнес-процессами' and
+                               self._is_student_presentation_lesson(item)), None)
+                if not lesson:
+                    raise ActionError('Пара не найдена.')
+                if datetime.now(ZoneInfo(APP_TIMEZONE)) >= self._student_presentation_end(lesson):
+                    raise ActionError('Пара уже закончилась.', 409)
+                self.db.swap_student_presentations(
+                    lesson_id, data['firstId'], data['secondId'],
+                    data['firstPosition'], data['secondPosition'], actor_id=user_id)
+                return 'Выступающие поменялись местами.'
             if action == 'save_student_presentation':
                 if not current:
                     raise ActionError('Сначала заполните профиль.', 403)

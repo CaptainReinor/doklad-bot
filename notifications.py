@@ -1,7 +1,5 @@
 """Persistent notifications; calendar dates are evaluated in the study timezone."""
-import hashlib
 import html
-import json
 import logging
 import math
 import re
@@ -104,8 +102,6 @@ def check_notifications(service, send_message, *, now=None):
     except Exception as exc:
         logger.warning('Uploaded-file cleanup failed: %s', type(exc).__name__)
     catalog = service.catalog()
-    fingerprint = hashlib.sha256(json.dumps(catalog['schedule'], sort_keys=True).encode()).hexdigest()
-    service.db.observe_schedule(fingerprint)
     users = service.db.get_all_users()
     users_by_id = {user['user_id']: user for user in users}
     for user in users:

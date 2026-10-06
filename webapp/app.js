@@ -479,6 +479,19 @@ function renderStudentPresentationQueue(lessonId) {
         return `<option value="${position}" ${position === selectedPosition ? "selected" : ""}>${escapeHtml(label)}</option>`;
     }).join("");
     const remainingPlaces = placeCount - visibleCount;
+    const swapOptions = selected => entries.map(entry => `<option value="${entry.presentationId}"
+        ${entry.presentationId === selected ? "selected" : ""}>${entry.position} — ${escapeHtml(entry.name)}</option>`).join("");
+    const adminSwap = isAdmin && queue.canSwap && queue.editable && entries.length > 1
+        ? `<details class="student-presentation-admin"><summary>Изменить порядок</summary>
+            <div class="student-presentation-form">
+                <label class="form-label" for="presentation-swap-first-${lessonId}">Первый выступающий</label>
+                <select class="form-control" id="presentation-swap-first-${lessonId}">${swapOptions(entries[0].presentationId)}</select>
+                <label class="form-label" for="presentation-swap-second-${lessonId}">Второй выступающий</label>
+                <select class="form-control" id="presentation-swap-second-${lessonId}">
+                    ${swapOptions(entries[1].presentationId)}</select>
+                <button class="btn btn-outline" ${busy || !connected ? "disabled" : ""}
+                    onclick="swapStudentPresentations(${lessonId})">Поменять местами</button>
+            </div></details>` : "";
     return `<details class="student-presentation" ${openStudentPresentationQueues.has(lessonId) ? "open" : ""}
         ontoggle="setStudentPresentationOpen(${lessonId}, this.open)">
         <summary>Список выступающих · ${participantCountLabel(entries.length)}</summary>
@@ -494,7 +507,26 @@ function renderStudentPresentationQueue(lessonId) {
             <button class="btn btn-primary" ${busy || !connected ? "disabled" : ""}
                 onclick="saveStudentPresentation(${lessonId})">${own ? "Сохранить" : "Записаться"}</button>
             <small>Тему и место можно менять до конца пары.</small></div>` : ""}
-        </details>`;
+        ${adminSwap}</details>`;
+}
+
+async function swapStudentPresentations(lessonId) {
+    const queue = studentPresentations.find(item => item.lessonId === lessonId);
+    if (!isAdmin || !queue?.canSwap || !queue.editable) return;
+    const firstId = Number(document.getElementById(`presentation-swap-first-${lessonId}`)?.value);
+    const secondId = Number(document.getElementById(`presentation-swap-second-${lessonId}`)?.value);
+    const first = queue.entries.find(entry => entry.presentationId === firstId);
+    const second = queue.entries.find(entry => entry.presentationId === secondId);
+    if (!first || !second || firstId === secondId) {
+        showStatus("Выберите двух разных выступающих");
+        return;
+    }
+    const prompt = `Поменять местами ${first.name} (место ${first.position}) и ${second.name} (место ${second.position})?`;
+    const confirmed = typeof tg?.showConfirm === "function"
+        ? await new Promise(resolve => tg.showConfirm(prompt, resolve)) : window.confirm(prompt);
+    if (!confirmed) return;
+    await performAction({action: "admin_swap_student_presentations", lessonId, firstId, secondId,
+        firstPosition: first.position, secondPosition: second.position});
 }
 
 function setStudentPresentationOpen(lessonId, isOpen) {
@@ -1107,7 +1139,6 @@ async function deleteLesson(lessonId) {
 const notificationTypes = [
     {id: "announcements", title: "Объявления", description: "Важные сообщения от администраторов."},
     {id: "assignments", title: "Домашние задания", description: "Новая домашка и напоминания за день до сдачи."},
-    {id: "schedule", title: "Изменения расписания", description: "Сообщение при обновлении расписания."},
     {id: "lessons", title: "Напоминания о парах", description: "Одна сводка за день примерно за час до первой пары."},
     {id: "topics", title: "Темы докладов", description: "Новые темы, изменения старых, напоминание за день до сдачи."}
 ];

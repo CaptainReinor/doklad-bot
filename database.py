@@ -99,6 +99,11 @@ class Database:
                 attempts INTEGER NOT NULL DEFAULT 0, next_attempt REAL NOT NULL DEFAULT 0,
                 PRIMARY KEY(event_key, user_id))''')
             conn.execute('CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT)')
+            # Schedule changes no longer produce notifications, including queued legacy jobs.
+            conn.execute("DELETE FROM notification_settings WHERE kind='schedule'")
+            conn.execute('''UPDATE notification_jobs SET sent_at=?, claimed_at=NULL
+                WHERE kind='schedule' AND sent_at IS NULL''', (time.time(),))
+            conn.execute("DELETE FROM app_meta WHERE key='schedule_hash'")
             conn.execute('''CREATE TABLE IF NOT EXISTS topics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL COLLATE NOCASE UNIQUE,
@@ -845,6 +850,30 @@ class Database:
                 WHERE p.lesson_id IN ({placeholders})
                 ORDER BY p.lesson_id, p.position''', lesson_ids)]
 
+    def swap_student_presentations(self, lesson_id, first_id, second_id,
+                                   first_position, second_position, *, actor_id):
+        with self.connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            rows = list(conn.execute('''SELECT id, position FROM student_presentations
+                WHERE lesson_id=? AND id IN (?, ?)''', (lesson_id, first_id, second_id)))
+            positions = {row['id']: row['position'] for row in rows}
+            if (first_id == second_id or len(rows) != 2 or
+                    positions.get(first_id) != first_position or positions.get(second_id) != second_position):
+                raise BookingConflict('Список изменился. Обновите его и выберите выступающих снова.')
+            now = timestamp()
+            conn.execute('UPDATE student_presentations SET position=0 WHERE id=?', (first_id,))
+            conn.execute('UPDATE student_presentations SET position=?, updated_at=? WHERE id=?',
+                         (first_position, now, second_id))
+            conn.execute('UPDATE student_presentations SET position=?, updated_at=? WHERE id=?',
+                         (second_position, now, first_id))
+            conn.execute('''INSERT INTO audit_log
+                (actor_id, action, entity_type, entity_id, summary, created_at)
+                VALUES (?, 'swap', 'student_presentation', ?, ?, ?)''',
+                         (actor_id, lesson_id,
+                          f'Изменён порядок выступлений: места {first_position} и {second_position}.', now))
+            conn.execute('''DELETE FROM audit_log WHERE id NOT IN
+                (SELECT id FROM audit_log ORDER BY id DESC LIMIT 300)''')
+
     def save_student_presentation(self, lesson_id, user_id, position, topic, topic_key,
                                   *, confirm_occupied=False, expected_occupant_id=None):
         now = timestamp()
@@ -1264,14 +1293,6 @@ class Database:
         with self.connection() as conn:
             self._enqueue(conn, kind, message, event_key=event_key, recipients=recipients,
                           next_attempt=next_attempt)
-
-    def observe_schedule(self, fingerprint):
-        with self.connection() as conn:
-            conn.execute('BEGIN IMMEDIATE')
-            row = conn.execute("SELECT value FROM app_meta WHERE key='schedule_hash'").fetchone()
-            if row and row['value'] != fingerprint:
-                self._enqueue(conn, 'schedule', '📅 Расписание обновилось. Откройте приложение, чтобы увидеть изменения.')
-            conn.execute("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('schedule_hash', ?)", (fingerprint,))
 
     def claim_notifications(self, limit=30, now=None):
         now = time.time() if now is None else now
