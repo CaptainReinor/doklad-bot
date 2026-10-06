@@ -154,7 +154,7 @@ function calendarTime(value, clock = "00.00") {
 }
 
 function lessonStart(item) { return calendarTime(item.date, item.time.split(/[–—-]/)[0]); }
-function lessonEnd(item) { return calendarTime(item.date, item.time.split(/[–—-]/).at(-1)); }
+function lessonEnd(item) { return calendarTime(item.date, item.time.split(/[–—-]/).slice(-1)[0]); }
 
 function studyNow() {
     const parts = new Intl.DateTimeFormat("en-GB", {
@@ -1486,10 +1486,15 @@ async function deleteAssignment(assignmentId) {
 function closeHomeworkEditor() { editingHomework = false; renderAdmin(); }
 
 document.addEventListener("DOMContentLoaded", async () => {
-    setupFilters();
     try {
+        setupFilters();
+        if (!tg && /(?:^|[&#])tgWebAppData=/.test(window.location.hash)) {
+            throw new Error("Не удалось загрузить подключение к Telegram. Повторите открытие приложения.");
+        }
         if (tg?.initData) {
-            const [, synchronized] = await Promise.all([api("visit", {}), api("sync")]);
+            // Visit statistics must never delay or prevent opening the app.
+            api("visit", {}).catch(() => {});
+            const synchronized = await api("sync");
             applyCatalog(synchronized.catalog);
             applyState(synchronized.state);
         }
@@ -1497,16 +1502,14 @@ document.addEventListener("DOMContentLoaded", async () => {
             applyCatalog(await api("catalog"));
             showStatus("Режим просмотра. Для регистрации и бронирования откройте приложение через кнопку бота.", 5000);
         }
+        renderAll();
+        syncRegistrationGate();
     } catch (error) {
-        showStatus(error.message, 5000);
-        try {
-            const response = await fetch("catalog.json", {cache: "no-store"});
-            if (response.ok) applyCatalog(await response.json());
-        } catch { /* The transient message already explains the failure. */ }
+        window.AppStartup?.fail(error.message);
+        return;
     }
-    renderAll();
-    syncRegistrationGate();
-    document.body.classList.remove("app-loading");
+    if (window.AppStartup) window.AppStartup.finish();
+    else document.body.classList.remove("app-loading");
     setInterval(() => { if (!document.hidden) refreshState(); }, 15000);
     setInterval(() => { renderSchedule(); }, 60000);
     window.addEventListener("focus", refreshState);
