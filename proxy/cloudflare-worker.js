@@ -1,5 +1,5 @@
 const BOT_ID = "8235003921";
-const APP_ORIGIN = "http://origin.138-16-179-240.sslip.io";
+const APP_ORIGIN = "https://origin.138-16-179-240.sslip.io";
 
 export default {
   async fetch(request) {
@@ -32,7 +32,9 @@ export default {
 };
 
 async function proxyApplication(request, incoming) {
-  const target = new URL(incoming.pathname + incoming.search, APP_ORIGIN);
+  const target = new URL(APP_ORIGIN);
+  target.pathname = incoming.pathname;
+  target.search = incoming.search;
   const headers = new Headers(request.headers);
   headers.delete("host");
   if (headers.has("origin")) headers.set("origin", APP_ORIGIN);

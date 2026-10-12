@@ -28,6 +28,10 @@ function trustedFileUrl() {
     } catch { return null; }
 }
 
+function decodedFileName(value) {
+    try { return decodeURIComponent(value); } catch { return value; }
+}
+
 async function renderFile() {
     const file = trustedFileUrl();
     if (!file) {
@@ -35,7 +39,7 @@ async function renderFile() {
         showMessage("Файл не найден или адрес недействителен.");
         return;
     }
-    const fileName = file.searchParams.get("name") || decodeURIComponent(file.pathname.split("/").pop());
+    const fileName = file.searchParams.get("name") || decodedFileName(file.pathname.split("/").pop());
     const extension = file.pathname.split(".").pop().toLowerCase();
     const downloadUrl = new URL(file.href);
     downloadUrl.searchParams.set("download", "1");

@@ -66,7 +66,7 @@ function auth(id) {
         await action(900,payload,409);
         await action(101,payload,403);
         // Free positions are available to the admin, including when moving someone else.
-        await queue.locator('.student-presentation-admin > summary').click();
+        assert.equal(await queue.locator('.student-presentation-admin').evaluate(e=>e.open),true);
         assert.match(await queue.locator(`#presentation-swap-second-${lessonId} option[value="7"]`).textContent(), /Свободно/);
         await queue.locator(`#presentation-swap-second-${lessonId}`).selectOption('7');
         await queue.getByRole('button',{name:'Переместить',exact:true}).click();

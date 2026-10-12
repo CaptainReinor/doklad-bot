@@ -39,6 +39,38 @@ def notification_html(message):
     return '\n'.join(lines)
 
 
+def send_notification(send_message, user_id, message):
+    """Split before HTML conversion so Telegram limits cannot break links or markup."""
+    # Prefer complete lines, keeping URLs intact even at chunk boundaries.
+    for chunk in _notification_line_chunks(message):
+        send_message(user_id, notification_html(chunk), parse_mode='HTML', disable_web_page_preview=True)
+
+
+def _notification_line_chunks(message):
+    current, size = [], 0
+    for line in message.splitlines(keepends=True):
+        line_size = len(line.encode('utf-16-le')) // 2
+        if size + line_size > 3500 and current:
+            yield ''.join(current)
+            current, size = [], 0
+        if line_size > 3500:
+            # Validated catalog fields are shorter; tolerate oversized legacy plain text.
+            part, part_size = [], 0
+            for char in line:
+                char_size = len(char.encode('utf-16-le')) // 2
+                if part_size + char_size > 3500:
+                    yield ''.join(part)
+                    part, part_size = [], 0
+                part.append(char)
+                part_size += char_size
+            current, size = part, part_size
+        else:
+            current.append(line)
+            size += line_size
+    if current:
+        yield ''.join(current)
+
+
 def is_deadline_tomorrow(deadline_str, current_date):
     today = current_date.date() if isinstance(current_date, datetime) else current_date
     if not isinstance(today, date) or not isinstance(deadline_str, str):
@@ -140,6 +172,32 @@ def check_notifications(service, send_message, *, now=None):
     direct_jobs = []
     topic_batches = {}
     for job in service.db.claim_notifications(limit=500, now=now.timestamp()):
+        if job['event_key'].startswith('lesson-day:'):
+            lesson_date = job['event_key'].split(':', 1)[1]
+            lessons = [lesson for lesson in service.visible_lessons(job['user_id'])
+                       if lesson['date'] == lesson_date and
+                       (start := lesson_start(lesson, timezone)) is not None and start > now]
+            lessons.sort(key=lambda item: lesson_start(item, timezone))
+            if not lessons:
+                service.db.finish_notification(job, success=True, now=now.timestamp())
+                continue
+            first_start = lesson_start(lessons[0], timezone)
+            if first_start - now > timedelta(hours=1):
+                service.db.defer_notification(job, (first_start - timedelta(hours=1)).timestamp())
+                continue
+            job['message'] = lesson_day_message(lessons, now, timezone)
+        if job['event_key'].startswith('assignment-added:'):
+            try:
+                assignment_id = int(job['event_key'].split(':', 1)[1])
+            except ValueError:
+                assignment_id = None
+            item = items_by_kind['assignments'].get(assignment_id)
+            if not item or item['archived']:
+                service.db.finish_notification(job, success=True, now=now.timestamp())
+                continue
+            link = f"\nМатериалы: {item['url']}" if item.get('url') else ''
+            job['message'] = (f"Добавлено домашнее задание\n{item['subject']}\n{item['description']}\n"
+                              f"Срок: {item['deadline']}{link}")
         if job['event_key'].startswith('deadline:'):
             _, kind, item_id, deadline = job['event_key'].split(':', 3)
             item = items_by_kind.get(kind, {}).get(int(item_id))
@@ -149,14 +207,18 @@ def check_notifications(service, send_message, *, now=None):
             )
             # Do not retry yesterday's "tomorrow" or a cancelled report reminder.
             if not item or item.get('deadline') != deadline or not still_owned or not is_deadline_tomorrow(deadline, now):
-                service.db.finish_notification(job, success=True)
+                service.db.finish_notification(job, success=True, now=now.timestamp())
                 continue
+            details = (f"{item['subject']}\n{item['description']}" if kind == 'assignments'
+                       else item['title'])
+            link = f"\nМатериалы: {item['url']}" if item.get('url') else ''
+            job['message'] = f"Срок сдачи завтра\n{details}\n{deadline}{link}"
         if job['event_key'].startswith(('topic-added:', 'topic-changed:')):
             try:
                 event_kind, raw_topic_id = job['event_key'].split(':', 2)[:2]
                 topic_id = int(raw_topic_id)
             except (TypeError, ValueError):
-                service.db.finish_notification(job, success=True)
+                service.db.finish_notification(job, success=True, now=now.timestamp())
                 continue
             topic = items_by_kind['topics'].get(topic_id)
             user = users_by_id.get(job['user_id'])
@@ -164,7 +226,7 @@ def check_notifications(service, send_message, *, now=None):
                               user and topic['group'] == user['group_name']):
                 topic = None
             if not topic:
-                service.db.finish_notification(job, success=True)
+                service.db.finish_notification(job, success=True, now=now.timestamp())
                 continue
             topic_batches.setdefault(job['user_id'], []).append((job, topic, event_kind))
             continue
@@ -175,9 +237,9 @@ def check_notifications(service, send_message, *, now=None):
             send_message(job['user_id'], job['message'])
         except Exception as exc:
             logger.warning('Notification delivery failed (%s); it will be retried.', type(exc).__name__)
-            service.db.finish_notification(job, success=False)
+            service.db.finish_notification(job, success=False, now=now.timestamp())
         else:
-            service.db.finish_notification(job, success=True)
+            service.db.finish_notification(job, success=True, now=now.timestamp())
 
     for user_id, batch in topic_batches.items():
         merged = {}
@@ -210,18 +272,17 @@ def check_notifications(service, send_message, *, now=None):
         except Exception as exc:
             logger.warning('Notification delivery failed (%s); it will be retried.', type(exc).__name__)
             for job, _, _ in batch:
-                service.db.finish_notification(job, success=False)
+                service.db.finish_notification(job, success=False, now=now.timestamp())
         else:
             for job, _, _ in batch:
-                service.db.finish_notification(job, success=True)
+                service.db.finish_notification(job, success=True, now=now.timestamp())
 
 
 def start_notification_thread(service, send_message, stop_event=None):
     stop_event = stop_event or threading.Event()
 
     def deliver(user_id, message):
-        send_message(user_id, notification_html(message), parse_mode='HTML',
-                     disable_web_page_preview=True)
+        send_notification(send_message, user_id, message)
 
     def run():
         while not stop_event.is_set():

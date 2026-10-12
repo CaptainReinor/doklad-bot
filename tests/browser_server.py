@@ -16,7 +16,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--db', type=Path, required=True)
     parser.add_argument('--port', type=int, default=8765)
+    parser.add_argument('--study-date', help='Freeze the study calendar for dated smoke fixtures (ISO).')
     args = parser.parse_args()
+    if args.study_date:
+        from datetime import datetime
+
+        import service as service_module
+        fixed_date = datetime.fromisoformat(args.study_date)
+        class FixtureDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed_date.replace(tzinfo=tz)
+        service_module.datetime = FixtureDateTime
     if args.db.exists():
         raise SystemExit('Use a new database path for every UI test run.')
     db = Database(args.db)

@@ -8,24 +8,12 @@ from datetime import datetime, timezone
 import pytest
 from conftest import ADMIN, TEST_TOKEN, register, signed_data
 
-import service as service_module
 from auth import validate_init_data
 from catalog import load_catalog
 from database import Database
 from notifications import check_notifications, is_deadline_tomorrow, notification_html
 from service import ENGLISH_SUBJECT, ActionError, Service, clean_group
 from storage import cleanup_uploads
-
-
-@pytest.fixture(autouse=True)
-def stable_study_date(monkeypatch):
-    class StableDateTime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            value = cls(2026, 9, 14, 12, 0)
-            return value.replace(tzinfo=tz) if tz else value
-
-    monkeypatch.setattr(service_module, 'datetime', StableDateTime)
 
 
 def test_catalog_schedule_only_splits_professional_english():
@@ -1062,6 +1050,8 @@ def test_admin_uploads_material_and_students_can_download_it(client, service, he
     assert attachment.status_code == 200 and attachment.data == b'hello'
     assert attachment.headers['Content-Disposition'].startswith('attachment')
     assert attachment.headers['Access-Control-Allow-Origin'] == 'https://web.telegram.org'
+    download.close()
+    attachment.close()
     created = client.post('/api/action', json={
         'action': 'create_assignment', 'subject': 'Управление бизнес-процессами',
         'description': 'Домашка с удаляемым файлом', 'deadline': '01.01.2099',

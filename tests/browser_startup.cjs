@@ -39,7 +39,8 @@ function auth() {
             if(['native-sdk','normal','visit-failed','visit-pending'].includes(scenario)) {
                 await page.waitForFunction(()=>window.AppStartup && document.getElementById('startupPanel').hidden);
                 assert.equal(await page.locator('body').evaluate(el=>el.classList.contains('app-loading')),false);
-                assert.ok(await page.locator('#homework .assignment-options').count()>0);
+                assert.equal(await page.evaluate(()=>connected),true);
+                assert.ok(await page.locator('#schedule .schedule-card').count()>0);
             } else {
                 if(scenario==='sync-pending') await page.clock.fastForward(16000);
                 await page.locator('#startupRetry').waitFor({state:'visible'});

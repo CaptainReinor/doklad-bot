@@ -1,0 +1,42 @@
+const {webkit} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const {createHmac} = require('node:crypto');
+const assert = require('node:assert/strict');
+const base=process.env.TEST_BASE_URL || 'http://127.0.0.1:8765';
+(async()=>{
+    const fields={auth_date:String(Math.floor(Date.now()/1000)),user:JSON.stringify({id:900})};
+    const secret=createHmac('sha256','WebAppData').update('123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi').digest();
+    fields.hash=createHmac('sha256',secret).update(Object.keys(fields).sort().map(k=>`${k}=${fields[k]}`).join('\n')).digest('hex');
+    const browser=await webkit.launch({headless:true});
+    try {
+        const page=await browser.newPage();
+        const errors=[];
+        page.on('pageerror',e=>errors.push(e.message));
+        await page.addInitScript(raw=>{window.Telegram={WebApp:{initData:raw,ready(){},expand(){},BackButton:{show(){},onClick(){}}}};},new URLSearchParams(fields).toString());
+        await page.route('**/telegram-web-app.js*',r=>r.fulfill({contentType:'application/javascript',body:'/* test SDK */'}));
+        await page.goto(base);
+        await page.waitForFunction(()=>connected);
+        await page.evaluate(()=>{switchTab('admin');openHomeworkEditor();});
+        await page.locator('#newAssignmentFile').setInputFiles({name:'Test.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4 test')});
+        let pending, requests=0;
+        await page.route('**/api/upload',r=>{requests++;pending=r;});
+        await page.evaluate(()=>{window.uploadResult=uploadAdminFile('newAssignmentFile').catch(e=>({error:e.message}));});
+        await page.waitForFunction(()=>uploadingMaterial);
+        assert.equal(await page.locator('#adminContent button:enabled').count(),0);
+        const second=await page.evaluate(()=>uploadAdminFile('newAssignmentFile').catch(e=>e.message));
+        assert.match(second,/Дождитесь/);
+        assert.equal(requests,1);
+        await pending.fulfill({contentType:'application/json',body:JSON.stringify({path:'/files/'+'a'.repeat(32)+'.pdf?name=Test.pdf'})});
+        assert.match(await page.evaluate(()=>window.uploadResult),/\/files\//);
+        assert.equal(await page.evaluate(()=>uploadingMaterial),false);
+        assert.ok(await page.locator('#adminContent button:enabled').count()>0);
+        await page.clock.install();
+        await page.evaluate(()=>{window.uploadResult=uploadAdminFile('newAssignmentFile').catch(e=>({error:e.message}));});
+        await page.waitForFunction(()=>uploadingMaterial);
+        await page.clock.fastForward(61000);
+        assert.match((await page.evaluate(()=>window.uploadResult)).error,/слишком много времени/);
+        assert.equal(await page.evaluate(()=>uploadingMaterial),false);
+        assert.ok(await page.locator('#adminContent button:enabled').count()>0);
+        assert.deepEqual(errors,[]);
+        console.log('Passed: duplicate upload prevented; editor disabled while uploading; success and timeout restore controls.');
+    } finally {await browser.close();}
+})().catch(e=>{console.error(e);process.exitCode=1;});

@@ -62,6 +62,16 @@ def test_group_chat_cannot_register_or_read_students(bot, service):
     assert not any('Зарегистрированные студенты' in c.args[1] for c in bot.send_message.call_args_list)
 
 
+def test_stats_excludes_archived_bookings(bot, service):
+    register(service)
+    topic = service.topics()[0]
+    service.perform(1, {'action': 'book_topic', 'topicId': topic['id']})
+    service.db.set_topic_active(topic['id'], False)
+    text = dispatch(bot, '/stats', user_id=ADMIN)
+    assert 'Занятых тем: 0' in text
+    assert 'Выступающих: 0' in text
+
+
 def test_cancel_and_restart_registration(bot, service):
     dispatch(bot, '/register')
     dispatch(bot, 'Иван')

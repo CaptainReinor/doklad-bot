@@ -16,7 +16,44 @@ let userData = null, isRegistered = false, isAdmin = false;
 let connected = false, busy = false, editingProfile = false;
 let editingTopics = false, editingSchedule = false, editingHomework = false, editingAudit = false, editingStats = false;
 let editingAnnouncements = false;
-let mutationVersion = 0, refreshing = false;
+let mutationVersion = 0, refreshing = false, uploadingMaterial = false;
+const renderedMarkup = new WeakMap();
+
+function replaceMarkupPreservingInputs(container, markup) {
+    if (renderedMarkup.get(container) === markup) return;
+    const controls = Array.from(container.querySelectorAll('input[id], textarea[id], select[id]')).map(element => {
+        const initial = element.tagName === "SELECT"
+            ? (Array.from(element.options).find(option => option.defaultSelected) || element.options[0])?.value
+            : element.defaultValue;
+        const topic = element.closest('.student-presentation-form')?.querySelector('input');
+        const draftingTopic = topic && topic.value !== topic.defaultValue;
+        return {id: element.id, value: element.value, dirty: element.value !== initial || Boolean(draftingTopic)};
+    });
+    const openDetails = Array.from(container.querySelectorAll('details[id]')).map(element => ({id: element.id, open: element.open}));
+    const active = container.contains(document.activeElement) ? document.activeElement : null;
+    const focus = active?.id ? {id: active.id, start: active.selectionStart, end: active.selectionEnd} : null;
+    container.innerHTML = markup;
+    renderedMarkup.set(container, markup);
+    controls.filter(control => control.dirty).forEach(control => {
+        const element = document.getElementById(control.id);
+        if (!element || !container.contains(element)) return;
+        if (element.tagName === "SELECT" && !Array.from(element.options).some(option => option.value === control.value)) return;
+        element.value = control.value;
+    });
+    openDetails.forEach(detail => {
+        const element = document.getElementById(detail.id);
+        if (element && container.contains(element)) element.open = detail.open;
+    });
+    if (focus) {
+        const element = document.getElementById(focus.id);
+        if (element && container.contains(element)) {
+            element.focus({preventScroll: true});
+            if (typeof focus.start === "number" && typeof element.setSelectionRange === "function") {
+                element.setSelectionRange(focus.start, focus.end);
+            }
+        }
+    }
+}
 let currentScheduleFilter = "upcoming", studyTimezone = "Europe/Moscow";
 let currentTopicSubject = "all", currentTopicView = "active", currentHomeworkView = "active";
 let currentAdminTopicView = "active", currentAdminHomeworkView = "active";
@@ -70,12 +107,16 @@ function safeHttpsUrl(value) {
     } catch { return ""; }
 }
 
+function decodedFileName(value) {
+    try { return decodeURIComponent(value); } catch { return value; }
+}
+
 function resourceButton(value, label = "Открыть материалы") {
     const url = safeHttpsUrl(value);
     if (!url) return "";
     const parsed = new URL(url);
     if (parsed.origin === window.location.origin && parsed.pathname.startsWith("/files/")) {
-        const fileName = parsed.searchParams.get("name") || decodeURIComponent(parsed.pathname.split("/").pop());
+        const fileName = parsed.searchParams.get("name") || decodedFileName(parsed.pathname.split("/").pop());
         const downloadUrl = new URL(parsed.href);
         downloadUrl.searchParams.set("download", "1");
         const viewerUrl = new URL("/viewer.html", window.location.origin);
@@ -267,22 +308,41 @@ async function uploadAdminFile(inputId) {
     const input = document.getElementById(inputId);
     const file = input?.files?.[0];
     if (!file) return "";
+    if (busy || uploadingMaterial) throw new Error("Дождитесь завершения предыдущего действия.");
     if (file.size > 10 * 1024 * 1024) throw new Error("Файл должен быть не больше 10 МБ.");
     const form = new FormData();
     form.append("file", file);
     const headers = {};
     if (tg?.initData) headers.Authorization = "tma " + tg.initData;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
+    const buttons = Array.from(document.querySelectorAll('#adminContent button'));
+    const previous = buttons.map(button => button.disabled);
+    uploadingMaterial = true;
+    buttons.forEach(button => { button.disabled = true; });
     showStatus("Загружаем файл…", 15000);
-    const response = await fetch(apiBase + "/api/upload", {method: "POST", headers, body: form});
-    let data;
-    try { data = await response.json(); }
-    catch { throw new Error("Сервер не смог загрузить файл."); }
-    if (!response.ok) throw new Error(data.error || "Не удалось загрузить файл.");
-    return new URL(data.path, window.location.origin).href;
+    try {
+        const response = await fetch(apiBase + "/api/upload", {
+            method: "POST", headers, body: form, signal: controller.signal
+        });
+        let data;
+        try { data = await response.json(); }
+        catch { throw new Error("Сервер не смог загрузить файл."); }
+        if (!response.ok) throw new Error(data.error || "Не удалось загрузить файл.");
+        return new URL(data.path, window.location.origin).href;
+    } catch (error) {
+        if (error.name === "AbortError") throw new Error("Загрузка заняла слишком много времени. Попробуйте снова.");
+        throw error;
+    } finally {
+        clearTimeout(timeout);
+        uploadingMaterial = false;
+        buttons.forEach((button, index) => { button.disabled = previous[index]; });
+    }
 }
 
 async function materialUrl(urlInputId, fileInputId) {
-    return await uploadAdminFile(fileInputId) || document.getElementById(urlInputId).value.trim();
+    const fallback = document.getElementById(urlInputId)?.value.trim() || "";
+    return await uploadAdminFile(fileInputId) || fallback;
 }
 
 function renderAll() {
@@ -302,7 +362,7 @@ function renderAll() {
 }
 
 async function refreshState() {
-    if (!tg?.initData || refreshing || busy || document.hidden) return;
+    if (!tg?.initData || refreshing || busy || uploadingMaterial || document.hidden) return;
     refreshing = true;
     const version = mutationVersion;
     try {
@@ -443,7 +503,7 @@ function renderToday() {
             <div class="hub-card-top"><strong>${escapeHtml(item.subject)}</strong><span>${escapeHtml(item.date)} · ${escapeHtml(item.time)}</span></div>
             <p>${escapeHtml([item.teacher, item.room].filter(Boolean).join(" · "))}</p>
             ${renderStudentPresentationQueue(item.lessonId)}</article>`).join("")}</div></section>` : "";
-    container.innerHTML = `${announcementSection}${lessonSection}${queueSection}${nearestSection}${additionalPresentationsSection}`;
+    replaceMarkupPreservingInputs(container, `${announcementSection}${lessonSection}${queueSection}${nearestSection}${additionalPresentationsSection}`);
 }
 
 function renderStudentPresentationQueue(lessonId) {
@@ -488,7 +548,7 @@ function renderStudentPresentationQueue(lessonId) {
             ${position} — ${escapeHtml(entry ? entry.name : "Свободно")}</option>`;
     }).join("");
     const adminSwap = isAdmin && queue.canSwap && queue.editable && entries.length > 0
-        ? `<details class="student-presentation-admin"><summary>Изменить порядок</summary>
+        ? `<details class="student-presentation-admin" id="presentation-admin-${lessonId}"><summary>Изменить порядок</summary>
             <div class="student-presentation-form">
                 <label class="form-label" for="presentation-swap-first-${lessonId}">Выступающий</label>
                 <select class="form-control" id="presentation-swap-first-${lessonId}">${swapOptions(entries[0].presentationId)}</select>
@@ -498,7 +558,7 @@ function renderStudentPresentationQueue(lessonId) {
                 <button class="btn btn-outline" ${busy || !connected ? "disabled" : ""}
                     onclick="swapStudentPresentations(${lessonId})">Переместить</button>
             </div></details>` : "";
-    return `<details class="student-presentation" ${openStudentPresentationQueues.has(lessonId) ? "open" : ""}
+    return `<details class="student-presentation" id="student-presentation-${lessonId}" ${openStudentPresentationQueues.has(lessonId) ? "open" : ""}
         ontoggle="setStudentPresentationOpen(${lessonId}, this.open)">
         <summary>Список выступающих · ${participantCountLabel(entries.length)}</summary>
         <ol class="student-presentation-places">${slots}</ol>
@@ -945,10 +1005,11 @@ async function createTopic() {
     const rawNumber = document.getElementById("newTopicNumber").value;
     if (!title) { showStatus("Введите название темы."); return; }
     if (!subject) { showStatus("Укажите предмет."); return; }
+    const scope = topicScopePayload("newTopic");
     let url;
     try { url = await materialUrl("newTopicUrl", "newTopicFile"); }
     catch (error) { showStatus(error.message, 5000); return; }
-    const payload = {action: "create_topic", title, subject, url, ...topicScopePayload("newTopic")};
+    const payload = {action: "create_topic", title, subject, url, ...scope};
     if (rawNumber) payload.number = Number(rawNumber);
     if (deadline) payload.deadline = deadline;
     if (await performAction(payload)) renderTopicEditor();
@@ -974,10 +1035,11 @@ async function addTopicDrafts() {
     if (!titles.length) { showStatus("Добавьте названия тем построчно."); return; }
     if (titles.length > 50) { showStatus("За один раз можно добавить до 50 тем."); return; }
     if (!subject) { showStatus("Укажите предмет для списка тем."); return; }
+    const scope = topicScopePayload("draftTopic");
     let url;
     try { url = await materialUrl("draftTopicUrl", "draftTopicFile"); }
     catch (error) { showStatus(error.message, 5000); return; }
-    const payload = {action: "add_topic_drafts", titles, subject, url, ...topicScopePayload("draftTopic")};
+    const payload = {action: "add_topic_drafts", titles, subject, url, ...scope};
     if (rawStartNumber) payload.startNumber = Number(rawStartNumber);
     if (deadline) payload.deadline = deadline;
     if (await performAction(payload)) renderTopicEditor();
@@ -1004,11 +1066,12 @@ async function saveTopic(topicId) {
     const deadline = apiDate(document.getElementById(`topic-deadline-${topicId}`).value);
     const number = Number(document.getElementById(`topic-number-${topicId}`).value);
     if (!subject) { showStatus("Укажите предмет."); return; }
+    const scope = topicScopePayload(String(topicId));
     let url;
     try { url = await materialUrl(`topic-url-${topicId}`, `topic-file-${topicId}`); }
     catch (error) { showStatus(error.message, 5000); return; }
     const payload = {action: "update_topic", topicId, title, subject, number, url,
-        ...topicScopePayload(String(topicId))};
+        ...scope};
     if (deadline) payload.deadline = deadline;
     if (await performAction(payload)) renderTopicEditor();
 }

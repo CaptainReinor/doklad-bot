@@ -46,7 +46,17 @@ restore_previous() {
 [ -f "$LEGACY/config.py" ] || { echo "Server config.py is missing." >&2; exit 1; }
 [ -f "$DATA/schedule.db" ] || { echo "Persistent schedule.db is missing." >&2; exit 1; }
 
-cp "$DATA/schedule.db" "/root/schedule.db-before-deploy-$(date +%Y%m%d-%H%M%S).bak"
+python3 - "$DATA/schedule.db" "/root/schedule.db-before-deploy-$(date +%Y%m%d-%H%M%S).bak" <<'PY'
+import sqlite3
+import sys
+from pathlib import Path
+
+with sqlite3.connect(Path(sys.argv[1]).as_uri() + '?mode=ro', uri=True) as source:
+    with sqlite3.connect(sys.argv[2]) as backup:
+        source.backup(backup)
+        if backup.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
+            raise SystemExit('Database backup verification failed.')
+PY
 
 if docker image inspect "$LATEST" >/dev/null 2>&1; then
     docker image tag "$LATEST" "$ROLLBACK"

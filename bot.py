@@ -139,13 +139,16 @@ def create_bot(service, token, *, threaded=True, web_app_url=WEB_APP_URL):
     def stats(message):
         if not admin(message):
             return
-        users, bookings = service.db.get_all_users(), service.db.get_all_bookings()
+        users = service.db.get_all_users()
+        topics = service.topics()
+        active_titles = {topic['title'] for topic in topics}
+        bookings = [row for row in service.db.get_all_bookings() if row['topic'] in active_titles]
         activity = service.db.get_admin_stats()
         groups = sorted({u['group_name'] for u in users})
         booked_topics = {row['topic'] for row in bookings}
         text = (f'Студентов: {len(users)}\nВходов сегодня: {activity["visitsToday"]}\n'
                 f'Входов за 7 дней: {activity["visits7Days"]}\n'
-                f'Тем: {len(service.catalog()["topics"])}\n'
+                f'Тем: {len(topics)}\n'
                 f'Занятых тем: {len(booked_topics)}\nВыступающих: {len(bookings)}\n')
         for group in groups:
             group_bookings = [row for row in bookings if row['group_name'] == group]

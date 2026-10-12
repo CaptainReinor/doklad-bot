@@ -40,7 +40,12 @@ def create_app(*, token=None, db_path=DATABASE_PATH, service=None, upload_dir=No
             return None
         origin = request.headers.get('Origin')
         # HTTPS may terminate at a reverse proxy; it must preserve the Host header.
-        same_host = origin and urlsplit(origin).scheme in ('http', 'https') and urlsplit(origin).netloc == request.host
+        try:
+            parsed_origin = urlsplit(origin) if origin else None
+        except ValueError:
+            return jsonify(error='Источник запроса не разрешён.'), 403
+        same_host = (parsed_origin and parsed_origin.scheme in ('http', 'https')
+                     and parsed_origin.netloc == request.host)
         if origin and origin not in ALLOWED_ORIGINS and not same_host:
             return jsonify(error='Источник запроса не разрешён.'), 403
         if request.method == 'OPTIONS':
@@ -120,7 +125,8 @@ def create_app(*, token=None, db_path=DATABASE_PATH, service=None, upload_dir=No
             'set_deadline', 'add_topic_drafts', 'delete_topic_draft',
             'clear_topic_drafts', 'publish_topic_drafts',
         }
-        should_cleanup = isinstance(data, dict) and data.get('action') in cleanup_actions
+        should_cleanup = (isinstance(data, dict) and isinstance(data.get('action'), str)
+                          and data['action'] in cleanup_actions)
         previous_urls = set(service.db.material_urls()) if should_cleanup else set()
         message = service.perform(user_id, data, g.telegram_user)
         if should_cleanup:

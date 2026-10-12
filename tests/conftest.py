@@ -2,16 +2,28 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import datetime
 from urllib.parse import urlencode
 
 import pytest
 
+import service as service_module
 from database import Database
 from server import create_app
 from service import Service
 
 TEST_TOKEN = '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi'
 ADMIN = 900
+
+
+@pytest.fixture(autouse=True)
+def stable_study_date(monkeypatch):
+    class StableDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 9, 14, 12, 0)
+            return value.replace(tzinfo=tz) if tz else value
+    monkeypatch.setattr(service_module, 'datetime', StableDateTime)
 
 
 def signed_data(user_id=1, *, token=TEST_TOKEN, auth_date=None, **extra):

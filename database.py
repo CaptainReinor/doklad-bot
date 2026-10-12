@@ -994,11 +994,17 @@ class Database:
                 [(assignment_id, number, title, details) for number, title, details in options])
             return True
 
-    def choose_assignment_option(self, assignment_id, option_number, user_id):
+    def choose_assignment_option(self, assignment_id, option_number, user_id, *, today=None):
         with self.connection() as conn:
             conn.execute('BEGIN IMMEDIATE')
             if not self._user(conn, user_id):
                 raise ValueError('Сначала зарегистрируйтесь.')
+            assignment = self._assignment(conn, assignment_id)
+            if not assignment:
+                raise BookingConflict('Домашнее задание уже удалено.')
+            if today and (datetime.strptime(assignment['deadline'], '%d.%m.%Y').date() <
+                          datetime.strptime(today, '%d.%m.%Y').date()):
+                raise BookingConflict('Срок выбора варианта прошёл.')
             row = conn.execute('''SELECT claimed_by FROM assignment_options
                 WHERE assignment_id=? AND option_number=?''',
                 (assignment_id, option_number)).fetchone()
@@ -1043,7 +1049,7 @@ class Database:
             link = f'\n🔗 Материалы: {url}' if url else ''
             self._enqueue(conn, 'assignments',
                           f'📝 Добавлено домашнее задание\n{subject}\n{description}\n'
-                          f'📅 Срок: {deadline}{link}')
+                          f'📅 Срок: {deadline}{link}', event_key=f'assignment-added:{assignment["id"]}')
             return assignment
 
     def update_assignment(self, assignment_id, subject, description, deadline, url=''):
@@ -1061,6 +1067,11 @@ class Database:
             conn.execute('''UPDATE assignments SET subject=?, description=?, deadline=?, url=?,
                 updated_at=? WHERE id=?''',
                          (subject, description, deadline, url, timestamp(), assignment_id))
+            link = f'\nМатериалы: {url}' if url else ''
+            conn.execute('''UPDATE notification_jobs SET message=?
+                WHERE event_key=? AND sent_at IS NULL''',
+                         (f'Добавлено домашнее задание\n{subject}\n{description}\nСрок: {deadline}{link}',
+                          f'assignment-added:{assignment_id}'))
             if assignment['deadline'] != deadline:
                 conn.execute('''UPDATE notification_jobs SET sent_at=?
                     WHERE sent_at IS NULL AND event_key LIKE ?''',
@@ -1075,8 +1086,8 @@ class Database:
                 raise ValueError('Домашнее задание не найдено.')
             conn.execute('DELETE FROM assignments WHERE id=?', (assignment_id,))
             conn.execute('''UPDATE notification_jobs SET sent_at=?
-                WHERE sent_at IS NULL AND event_key LIKE ?''',
-                         (time.time(), f'deadline:assignments:{assignment_id}:%'))
+                WHERE sent_at IS NULL AND (event_key LIKE ? OR event_key=?)''',
+                         (time.time(), f'deadline:assignments:{assignment_id}:%', f'assignment-added:{assignment_id}'))
             return True
 
     @staticmethod
@@ -1189,13 +1200,29 @@ class Database:
             return conn.execute('DELETE FROM presentation_queue WHERE topic_id=?',
                                 (topic_id,)).rowcount
 
-    def book(self, topic, user_id):
+    def book(self, topic, user_id, *, today=None):
         try:
             with self.connection() as conn:
                 conn.execute('BEGIN IMMEDIATE')
                 user = self._user(conn, user_id)
                 if not user:
                     raise ValueError('Сначала зарегистрируйтесь.')
+                if 'id' in topic:
+                    topic = self._topic(conn, topic['id'])
+                else:
+                    row = conn.execute('SELECT id FROM topics WHERE title=? AND deleted=0',
+                                       (topic['title'],)).fetchone()
+                    topic = self._topic(conn, row['id']) if row else None
+                if not topic or not topic['active']:
+                    raise BookingConflict('Эта тема уже удалена или находится в архиве.')
+                if today:
+                    row = conn.execute("SELECT deadline FROM deadlines WHERE kind='topics' AND item_id=?",
+                                       (topic['id'],)).fetchone()
+                    deadline = row['deadline'] if row else next((item.get('deadline') for item in
+                               load_catalog()['topics'] if item['id'] == topic['id']), None)
+                    if deadline and (datetime.strptime(deadline, '%d.%m.%Y').date() <
+                                     datetime.strptime(today, '%d.%m.%Y').date()):
+                        raise BookingConflict('Срок выбора темы прошёл.')
                 if not topic['is_common'] and topic['group_name'] != user['group_name']:
                     raise ValueError('Эта тема предназначена для другой группы.')
                 existing = conn.execute('SELECT * FROM bookings WHERE topic=? ORDER BY id',
@@ -1271,11 +1298,13 @@ class Database:
 
     def set_deadline(self, kind, item_id, deadline):
         with self.connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
             conn.execute('''INSERT INTO deadlines (kind, item_id, deadline) VALUES (?, ?, ?)
                 ON CONFLICT(kind, item_id) DO UPDATE SET deadline=excluded.deadline''', (kind, item_id, deadline))
             # Cancel unsent reminders carrying the previous deadline.
             conn.execute('''UPDATE notification_jobs SET sent_at=?
-                WHERE sent_at IS NULL AND event_key LIKE ?''', (time.time(), f'deadline:{kind}:{item_id}:%'))
+                WHERE sent_at IS NULL AND event_key LIKE ? AND event_key<>?''',
+                         (time.time(), f'deadline:{kind}:{item_id}:%', f'deadline:{kind}:{item_id}:{deadline}'))
     @staticmethod
     def _enabled(settings, kind):
         return settings.get(kind, False)
@@ -1321,6 +1350,12 @@ class Database:
                 attempts=attempts+1, next_attempt=? WHERE event_key=? AND user_id=?''',
                 (now if success else None, now + min(3600, 60 * 2 ** min(job['attempts'], 6)),
                  job['event_key'], job['user_id']))
+
+    def defer_notification(self, job, next_attempt):
+        with self.connection() as conn:
+            conn.execute('''UPDATE notification_jobs SET claimed_at=NULL, next_attempt=?
+                WHERE event_key=? AND user_id=? AND sent_at IS NULL''',
+                         (next_attempt, job['event_key'], job['user_id']))
 
 
 if __name__ == '__main__':

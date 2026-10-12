@@ -101,6 +101,8 @@ class Service:
         except ValueError as exc:
             raise ActionError('Дата занятия не существует.') from exc
         raw_time = data.get('time')
+        if not isinstance(raw_time, str):
+            raise ActionError('Укажите время в формате 18.30–19.50.')
         match = re.fullmatch(r'\s*(\d{1,2})[.:](\d{2})\s*[-–—]\s*(\d{1,2})[.:](\d{2})\s*',
                              raw_time or '')
         if not match:
@@ -417,6 +419,8 @@ class Service:
         if not isinstance(data, dict):
             raise ActionError('Ожидается объект с действием.')
         action = data.get('action')
+        if not isinstance(action, str):
+            raise ActionError('Укажите действие.')
         current = self.db.get_user(user_id)
         try:
             if action in ('create_announcement', 'update_announcement', 'delete_announcement'):
@@ -772,7 +776,8 @@ class Service:
                 if self._deadline_is_past(assignment['deadline']):
                     raise ActionError('Срок выбора варианта прошёл.', 409)
                 if action == 'choose_assignment_option':
-                    changed = self.db.choose_assignment_option(assignment_id, number, user_id)
+                    changed = self.db.choose_assignment_option(assignment_id, number, user_id,
+                                                                today=self._today_string())
                     return 'Вариант выбран.' if changed else 'Этот вариант уже выбран вами.'
                 changed = self.db.release_assignment_option(assignment_id, number, user_id)
                 return 'Вариант освобождён.' if changed else 'Вариант уже свободен.'
@@ -786,9 +791,10 @@ class Service:
                     if topic['id'] not in {item['id'] for item in self.visible_topics(user_id)}:
                         raise ActionError('Эта тема предназначена для другой группы.', 403)
                     changed = self.db.book({
+                        'id': topic['id'],
                         'title': topic['title'], 'is_common': topic['isCommon'],
                         'is_multi': topic['isMulti'], 'group_name': topic['group']
-                    }, user_id)
+                    }, user_id, today=self._today_string())
                     return 'Тема забронирована.' if changed else 'Эта тема уже забронирована вами.'
                 changed = self.db.cancel(topic['title'], user_id)
                 return 'Бронирование отменено.' if changed else 'У вас нет брони на эту тему.'
