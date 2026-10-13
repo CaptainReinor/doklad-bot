@@ -378,15 +378,13 @@ async function main() {
         const queueTopic = b.locator('#topicsContainer .topic-card').filter({hasText:'Доклад для очереди сегодня'});
         await queueTopic.getByRole('button', {name:'Выбрать тему'}).click();
         await b.evaluate(() => switchTab('today'));
-        await b.locator('#today .queue-card').filter({hasText:'Бизнес-процессы'}).waitFor();
+        await b.waitForFunction(()=>!busy);
+        await b.evaluate(()=>renderToday());
         assert.equal(await b.locator('#today .today-deadline').filter({hasText:'Доклад для очереди сегодня'}).count(), 1);
         assert.equal(await b.locator('#today .nearby-item').filter({hasText:'Доклад для очереди сегодня'}).count(), 0);
-        assert.equal(await b.locator('#today .queue-slot').count(), 1);
-        await b.locator('#today .queue-slot.empty').click();
-        await b.locator('#today .queue-slot.mine').waitFor();
-        assert.match(await b.locator('#today .queue-slot.mine').textContent(), /Доклад для очереди сегодня/);
+        assert.equal(await b.locator('#today .queue-slot, #today .queue-card').count(), 0);
         await b.screenshot({path:path.join(artifacts, 'today-hub-mobile.png'), fullPage:true});
-        checks.push('Today shows due reports once and the presentation queue lets an owner choose a slot');
+        checks.push('Today shows due reports without legacy report-slot controls');
         await admin.screenshot({path:path.join(artifacts, 'admin-tools-desktop.png'), fullPage:true});
 
         const newcomer = await pageFor(104);

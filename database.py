@@ -324,9 +324,12 @@ class Database:
                     counters[row['subject']] = number
                     conn.execute('UPDATE topics SET display_number=? WHERE id=?',
                                  (number, row['id']))
-            conn.execute('''CREATE UNIQUE INDEX IF NOT EXISTS idx_topics_subject_number
+            # Archives may reuse visible numbers. Current-number uniqueness is checked
+            # under BEGIN IMMEDIATE, including topics archived by a passed deadline.
+            conn.execute('DROP INDEX IF EXISTS idx_topics_subject_number')
+            conn.execute('''CREATE INDEX idx_topics_subject_number
                 ON topics(subject, display_number) WHERE deleted=0''')
-            conn.execute('PRAGMA user_version=18')
+            conn.execute('PRAGMA user_version=19')
 
     @staticmethod
     def _user(conn, user_id):
@@ -470,39 +473,56 @@ class Database:
             return result
 
     @staticmethod
-    def _next_topic_number(conn, subject, exclude_topic_id=None):
-        query = '''SELECT display_number FROM topics
-            WHERE subject=? AND deleted=0 AND display_number>0'''
-        params = [subject]
-        if exclude_topic_id is not None:
-            query += ' AND id<>?'
-            params.append(exclude_topic_id)
-        used = {row['display_number'] for row in conn.execute(query, params)}
+    def _number_day(today=None):
+        return (datetime.strptime(today, '%d.%m.%Y').date() if today else
+                datetime.now(ZoneInfo(APP_TIMEZONE)).date())
+
+    @classmethod
+    def _number_deadline_is_past(cls, deadline, today=None):
+        return bool(deadline and datetime.strptime(deadline, '%d.%m.%Y').date() < cls._number_day(today))
+
+    @staticmethod
+    def _topic_deadline(conn, topic_id):
+        row = conn.execute("SELECT deadline FROM deadlines WHERE kind='topics' AND item_id=?",
+                           (topic_id,)).fetchone()
+        return row['deadline'] if row else next((item.get('deadline') for item in
+            load_catalog()['topics'] if item['id'] == topic_id), None)
+
+    @classmethod
+    def _used_topic_numbers(cls, conn, subject, exclude_topic_id=None, today=None):
+        return {row['display_number'] for row in conn.execute(
+            '''SELECT id, display_number FROM topics WHERE subject=? AND active=1
+               AND deleted=0 AND id<>COALESCE(?, -1) AND display_number>0''',
+            (subject, exclude_topic_id))
+            if not cls._number_deadline_is_past(cls._topic_deadline(conn, row['id']), today)}
+
+    @classmethod
+    def _next_topic_number(cls, conn, subject, exclude_topic_id=None, today=None):
+        used = cls._used_topic_numbers(conn, subject, exclude_topic_id, today)
         number = 1
         while number in used:
             number += 1
         return number
 
     @classmethod
-    def _topic_number(cls, conn, subject, display_number=None, exclude_topic_id=None):
+    def _topic_number(cls, conn, subject, display_number=None, exclude_topic_id=None,
+                      *, today=None, archived=False):
         if display_number in (None, 0):
-            return cls._next_topic_number(conn, subject, exclude_topic_id)
+            return cls._next_topic_number(conn, subject, exclude_topic_id, today)
         if type(display_number) is not int or not 1 <= display_number <= 9999:
             raise ValueError('Номер темы должен быть целым числом от 1 до 9999.')
-        duplicate = conn.execute('''SELECT id FROM topics
-            WHERE subject=? AND display_number=? AND deleted=0 AND id<>COALESCE(?, -1)''',
-                                 (subject, display_number, exclude_topic_id)).fetchone()
-        if duplicate:
+        if not archived and display_number in cls._used_topic_numbers(conn, subject, exclude_topic_id, today):
             raise ValueError('У этого предмета уже есть тема с таким номером.')
         return display_number
 
     def create_topic(self, title, subject, is_common, is_multi, group_name, url='',
-                     display_number=None):
+                     display_number=None, *, deadline=None, today=None):
         try:
             with self.connection() as conn:
                 conn.execute('BEGIN IMMEDIATE')
                 now = timestamp()
-                display_number = self._topic_number(conn, subject, display_number)
+                display_number = self._topic_number(conn, subject, display_number, today=today,
+                                                   archived=self._number_deadline_is_past(deadline, today))
                 cursor = conn.execute('''INSERT INTO topics
                     (title, subject, display_number, is_common, is_multi, group_name, url,
                      active, deleted, created_at, updated_at)
@@ -510,6 +530,8 @@ class Database:
                                       (title, subject, display_number, int(is_common),
                                        int(is_multi), group_name, url, now, now))
                 topic = self._topic(conn, cursor.lastrowid)
+                if deadline:
+                    self._write_deadline(conn, 'topics', topic['id'], deadline)
                 scope = 'Общий доклад' if is_common else f'Группа: {group_name}'
                 deliver_after = time.time() + TOPIC_NOTIFICATION_BATCH_DELAY
                 recipients = None if is_common else {row['user_id'] for row in conn.execute(
@@ -578,7 +600,7 @@ class Database:
         with self.connection() as conn:
             return conn.execute('DELETE FROM topic_drafts WHERE admin_id=?', (admin_id,)).rowcount
 
-    def publish_topic_drafts(self, admin_id):
+    def publish_topic_drafts(self, admin_id, *, today=None):
         try:
             with self.connection() as conn:
                 conn.execute('BEGIN IMMEDIATE')
@@ -595,7 +617,8 @@ class Database:
                 topics = []
                 for draft in drafts:
                     display_number = self._topic_number(
-                        conn, draft['subject'], draft['display_number'] or None)
+                        conn, draft['subject'], draft['display_number'] or None, today=today,
+                        archived=self._number_deadline_is_past(draft['deadline'], today))
                     cursor = conn.execute('''INSERT INTO topics
                         (title, subject, display_number, is_common, is_multi, group_name, url,
                          active, deleted, created_at, updated_at)
@@ -640,7 +663,7 @@ class Database:
                 ORDER BY a.id DESC LIMIT ?''', (limit,))]
 
     def update_topic(self, topic_id, title, subject, is_common, is_multi, group_name, url='',
-                     display_number=None):
+                     display_number=None, *, deadline=None, today=None):
         try:
             with self.connection() as conn:
                 conn.execute('BEGIN IMMEDIATE')
@@ -650,16 +673,18 @@ class Database:
                 if display_number is None and subject == topic['subject']:
                     display_number = topic['display_number']
                 elif display_number is None:
-                    same_number = conn.execute('''SELECT id FROM topics
-                        WHERE subject=? AND display_number=? AND deleted=0 AND id<>?''',
-                                               (subject, topic['display_number'], topic_id)).fetchone()
+                    same_number = topic['display_number'] in self._used_topic_numbers(conn, subject, topic_id, today)
                     display_number = (None if same_number else topic['display_number'])
+                current_deadline = self._topic_deadline(conn, topic_id)
+                proposed_deadline = deadline if deadline is not None else current_deadline
                 display_number = self._topic_number(
-                    conn, subject, display_number, exclude_topic_id=topic_id)
+                    conn, subject, display_number, exclude_topic_id=topic_id, today=today,
+                    archived=not topic['active'] or self._number_deadline_is_past(proposed_deadline, today))
                 if (topic['title'] == title and topic['subject'] == subject and
                         topic['display_number'] == display_number and
                         topic['is_common'] == is_common and topic['is_multi'] == is_multi and
-                        topic['group_name'] == group_name and topic['url'] == url):
+                        topic['group_name'] == group_name and topic['url'] == url and
+                        proposed_deadline == current_deadline):
                     return topic
                 bookings = conn.execute('SELECT * FROM bookings WHERE topic=?',
                                         (topic['title'],)).fetchall()
@@ -675,6 +700,8 @@ class Database:
                     is_common=?, is_multi=?, group_name=?, url=?, updated_at=? WHERE id=?''',
                              (title, subject, display_number, int(is_common), int(is_multi),
                               group_name, url, timestamp(), topic_id))
+                if deadline is not None and deadline != current_deadline:
+                    self._write_deadline(conn, 'topics', topic_id, deadline)
                 if topic['title'] != title:
                     conn.execute('UPDATE bookings SET topic=? WHERE topic=?', (title, topic['title']))
                 return self._topic(conn, topic_id)
@@ -697,12 +724,15 @@ class Database:
             self._enqueue(conn, 'topics', '', event_key=f'topic-changed:{topic_id}:{uuid.uuid4()}',
                           actor_id=actor_id, recipients=recipients, next_attempt=deliver_after)
 
-    def set_topic_active(self, topic_id, active):
+    def set_topic_active(self, topic_id, active, *, today=None):
         with self.connection() as conn:
             conn.execute('BEGIN IMMEDIATE')
             topic = self._topic(conn, topic_id)
             if not topic:
                 raise ValueError('Тема не найдена.')
+            if active:
+                self._topic_number(conn, topic['subject'], topic['display_number'], topic_id, today=today,
+                    archived=self._number_deadline_is_past(self._topic_deadline(conn, topic_id), today))
             conn.execute('UPDATE topics SET active=?, updated_at=? WHERE id=?',
                          (int(active), timestamp(), topic_id))
             return self._topic(conn, topic_id)
@@ -1296,15 +1326,24 @@ class Database:
         with self.connection() as conn:
             return [dict(r) for r in conn.execute('SELECT * FROM deadlines')]
 
-    def set_deadline(self, kind, item_id, deadline):
+    @staticmethod
+    def _write_deadline(conn, kind, item_id, deadline):
+        conn.execute('''INSERT INTO deadlines (kind, item_id, deadline) VALUES (?, ?, ?)
+            ON CONFLICT(kind, item_id) DO UPDATE SET deadline=excluded.deadline''', (kind, item_id, deadline))
+        conn.execute('''UPDATE notification_jobs SET sent_at=?
+            WHERE sent_at IS NULL AND event_key LIKE ? AND event_key<>?''',
+                     (time.time(), f'deadline:{kind}:{item_id}:%', f'deadline:{kind}:{item_id}:{deadline}'))
+
+    def set_deadline(self, kind, item_id, deadline, *, today=None):
         with self.connection() as conn:
             conn.execute('BEGIN IMMEDIATE')
-            conn.execute('''INSERT INTO deadlines (kind, item_id, deadline) VALUES (?, ?, ?)
-                ON CONFLICT(kind, item_id) DO UPDATE SET deadline=excluded.deadline''', (kind, item_id, deadline))
-            # Cancel unsent reminders carrying the previous deadline.
-            conn.execute('''UPDATE notification_jobs SET sent_at=?
-                WHERE sent_at IS NULL AND event_key LIKE ? AND event_key<>?''',
-                         (time.time(), f'deadline:{kind}:{item_id}:%', f'deadline:{kind}:{item_id}:{deadline}'))
+            if kind == 'topics':
+                topic = self._topic(conn, item_id)
+                if topic and topic['active']:
+                    self._topic_number(conn, topic['subject'], topic['display_number'], item_id, today=today,
+                                       archived=self._number_deadline_is_past(deadline, today))
+            self._write_deadline(conn, kind, item_id, deadline)
+
     @staticmethod
     def _enabled(settings, kind):
         return settings.get(kind, False)

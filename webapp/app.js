@@ -7,6 +7,7 @@ let assignmentOptions = [];
 const openAssignmentOptionLists = new Set();
 const visibleAssignmentOptionCounts = new Map();
 let presentationQueues = [], studentPresentations = [];
+const REPORT_ORDER_SUBJECT = "Управление программами и портфелями проектов";
 const openStudentPresentationQueues = new Set();
 const visibleStudentPresentationPlaces = new Map();
 let bookings = [], myBookings = [], notificationSettings = {};
@@ -456,12 +457,29 @@ function todayDeadlineEvents() {
         }));
     const myTopicIds = new Set(myBookings.map(item => item.id));
     topicsData
-        .filter(item => myTopicIds.has(item.id) && !item.archived && item.deadline === today)
+        .filter(item => myTopicIds.has(item.id) && !item.archived && item.deadline === today &&
+            !(item.subject === REPORT_ORDER_SUBJECT && scheduleData.some(lesson =>
+                lesson.date === today && lesson.subject === item.subject)))
         .forEach(item => events.push({
             kind: "Доклад", title: item.title,
             details: shortSubject(item.subject), url: item.url || ""
         }));
     return events.sort((a, b) => a.kind.localeCompare(b.kind, "ru") || a.title.localeCompare(b.title, "ru"));
+}
+
+function renderLessonReportNote(lesson, lessons) {
+    if (lesson.subject !== REPORT_ORDER_SUBJECT || lesson.date !== studyToday() ||
+            lessons.find(item => item.subject === lesson.subject)?.id !== lesson.id) return "";
+    const ownIds = new Set(myBookings.map(item => item.id));
+    const reports = topicsData.filter(item => ownIds.has(item.id) && !item.archived &&
+        item.subject === lesson.subject && item.deadline === lesson.date)
+        .sort((a, b) => a.number - b.number || a.id - b.id);
+    if (!reports.length) return "";
+    return `<div class="lesson-report-note"><strong>Вы выступаете с докладом</strong>
+        ${reports.map(item => `<div class="lesson-report-item">
+            <p>Ваша очередь: <strong>${escapeHtml(item.number)}</strong></p>
+            <p>Ваша тема: <strong>${escapeHtml(item.title)}</strong></p>
+            ${resourceButton(item.url, "Материалы доклада")}</div>`).join("")}</div>`;
 }
 
 function renderToday() {
@@ -483,13 +501,14 @@ function renderToday() {
         <div class="hub-list">${lessons.map(item => `<article class="hub-card today-lesson">
             <div class="hub-card-top"><strong>${escapeHtml(item.subject)}</strong><span>${escapeHtml(item.time)}</span></div>
             <p>${escapeHtml([item.teacher, item.room].filter(Boolean).join(" · ") || "Детали не указаны")}</p>
-            ${resourceButton(item.url, "Подключиться к паре")}${renderStudentPresentationQueue(item.id)}</article>`).join("")}
+            ${resourceButton(item.url, "Подключиться к паре")}${renderLessonReportNote(item, lessons)}${renderStudentPresentationQueue(item.id)}</article>`).join("")}
             ${deadlines.map(item => `<article class="hub-card today-deadline">
                 <div class="hub-card-top"><strong>${escapeHtml(item.kind)}</strong><span>Срок сегодня</span></div>
                 <h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.details)}</p>
                 ${resourceButton(item.url, "Открыть материалы")}${renderAssignmentHubOptions(item.assignmentId)}</article>`).join("")}</div></section>` : "";
-    const queueSection = presentationQueues.length ? `<section class="hub-section"><h3>Очередь докладов</h3>
-        <div class="hub-list">${presentationQueues.map((queue, queueIndex) => renderPresentationQueue(queue, queueIndex)).join("")}</div></section>` : "";
+    // Report-slot selection is paused; order comes from topic numbers instead.
+    // const queueSection = presentationQueues.length ? `<section class="hub-section"><h3>Очередь докладов</h3>
+    //     <div class="hub-list">${presentationQueues.map((queue, queueIndex) => renderPresentationQueue(queue, queueIndex)).join("")}</div></section>` : "";
     const nearestSection = `<section class="hub-section"><h3>Ближайшее</h3>
         <div class="hub-list">${nearest.length ? nearest.map(item => `<article class="hub-card nearby-item">
             <div class="hub-card-top"><strong>${escapeHtml(item.kind)}</strong><span>${escapeHtml(item.dateLabel)}</span></div>
@@ -503,7 +522,7 @@ function renderToday() {
             <div class="hub-card-top"><strong>${escapeHtml(item.subject)}</strong><span>${escapeHtml(item.date)} · ${escapeHtml(item.time)}</span></div>
             <p>${escapeHtml([item.teacher, item.room].filter(Boolean).join(" · "))}</p>
             ${renderStudentPresentationQueue(item.lessonId)}</article>`).join("")}</div></section>` : "";
-    replaceMarkupPreservingInputs(container, `${announcementSection}${lessonSection}${queueSection}${nearestSection}${additionalPresentationsSection}`);
+    replaceMarkupPreservingInputs(container, `${announcementSection}${lessonSection}${nearestSection}${additionalPresentationsSection}`);
 }
 
 function renderStudentPresentationQueue(lessonId) {
@@ -633,6 +652,7 @@ async function saveStudentPresentation(lessonId) {
         confirmOccupied, expectedOccupantId});
 }
 
+/* Paused legacy report-slot UI. Zolotukhin's lesson lists above remain active.
 function renderPresentationQueue(queue, queueIndex) {
     const positioned = new Map(queue.reports.filter(item => item.position).map(item => [item.position, item]));
     const mine = queue.reports.filter(item => item.isMine);
@@ -669,6 +689,7 @@ async function leavePresentationQueue(queueIndex, topicId) {
     await performAction({action: "leave_presentation_queue", date: queue.date,
         subject: queue.subject, topicId});
 }
+*/
 
 function renderTopics() {
     const container = document.getElementById("topicsContainer");

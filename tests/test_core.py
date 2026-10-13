@@ -81,7 +81,7 @@ def test_v15_migration_restores_grouped_english_lessons(tmp_path):
     assert sum(item['group'] == 'МН-4-25-01' for item in english) == 5
     assert sum(item['group'] == 'МН-4-25-02' for item in english) == 5
     with db.connection() as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 18
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 19
 
 
 def test_v15_migration_replaces_gapped_ids_with_subject_scoped_numbers(tmp_path):
@@ -299,7 +299,7 @@ def test_v7_migration_preserves_cross_group_bookings_and_locks_topic(tmp_path):
     topic = next(item for item in db.get_topics(include_inactive=True) if item['id'] == 1)
     assert topic['is_common'] is True and topic['is_multi'] is False
     assert len(db.get_all_bookings()) == 2
-    assert sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0] == 18
+    assert sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0] == 19
 
 
 def test_db_location_does_not_follow_cwd(db, monkeypatch, tmp_path):
@@ -973,6 +973,7 @@ def test_announcements_are_admin_only_and_default_notification_is_sent(service):
 
 
 def test_presentation_queue_is_automatic_and_has_one_slot_per_booked_report(service, monkeypatch):
+    monkeypatch.setattr('service.LEGACY_REPORT_QUEUES_ENABLED', True)
     today = '14.12.2099'
     subject = 'Управление бизнес-процессами'
     monkeypatch.setattr(Service, '_today_string', staticmethod(lambda: today))
@@ -1019,6 +1020,7 @@ def test_presentation_queue_is_automatic_and_has_one_slot_per_booked_report(serv
 
 
 def test_presentation_queue_requires_matching_lesson_and_deadline(service, monkeypatch):
+    monkeypatch.setattr('service.LEGACY_REPORT_QUEUES_ENABLED', True)
     today = '14.12.2099'
     monkeypatch.setattr(Service, '_today_string', staticmethod(lambda: today))
     register(service, 1)

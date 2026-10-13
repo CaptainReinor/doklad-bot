@@ -11,6 +11,9 @@ from settings import ADMIN_IDS, APP_TIMEZONE
 
 ALLOWED_GROUPS = ('МН-4-25-01', 'МН-4-25-02')
 ENGLISH_SUBJECT = 'Иностранный язык профессиональных коммуникаций'
+# Keep the old report-slot implementation and its data available for a future return.
+# Lesson-specific Zolotukhin lists use student_presentations and are independent.
+LEGACY_REPORT_QUEUES_ENABLED = False
 STUDENT_PRESENTATION_SUBJECTS = frozenset({
     'Управление бизнес-процессами',
     'Методы реализации научно-исследовательских проектов',
@@ -235,6 +238,8 @@ class Service:
 
     def presentation_queues(self, user_id, queue_date=None, *, lessons=None,
                             topics=None, booking_rows=None):
+        if not LEGACY_REPORT_QUEUES_ENABLED:
+            return []
         queue_date = queue_date or self._today_string()
         lessons = [item for item in (lessons if lessons is not None else self.visible_lessons(user_id))
                    if item['date'] == queue_date]
@@ -512,6 +517,8 @@ class Service:
                     expected_occupant_id=expected_occupant_id)
                 return 'Запись сохранена.'
             if action in ('choose_presentation_position', 'leave_presentation_queue'):
+                if not LEGACY_REPORT_QUEUES_ENABLED:
+                    raise ActionError('Выбор очереди для докладов отключён. Порядок определяется номером темы.', 409)
                 if not current:
                     raise ActionError('Сначала заполните профиль.', 403)
                 queue_date = data.get('date')
@@ -660,7 +667,7 @@ class Service:
                 if action == 'clear_topic_drafts':
                     self.db.clear_topic_drafts(user_id)
                     return 'Черновик очищен.'
-                topics = self.db.publish_topic_drafts(user_id)
+                topics = self.db.publish_topic_drafts(user_id, today=self._today_string())
                 self.db.log_audit(user_id, 'publish', 'topic_batch', None,
                                   f'Опубликовано тем: {len(topics)}')
                 return f'Опубликовано тем: {len(topics)}. Пользователи получат одну подборку.'
@@ -676,9 +683,7 @@ class Service:
                     deadline = self._valid_deadline(data['deadline']) if data.get('deadline') else None
                     url = self._optional_url(data.get('url', ''))
                     topic = self.db.create_topic(title, subject, is_common, is_multi, group_name,
-                                                 url, display_number)
-                    if deadline:
-                        self.db.set_deadline('topics', topic['id'], deadline)
+                                                 url, display_number, deadline=deadline, today=self._today_string())
                     self.db.log_audit(user_id, 'create', 'topic', topic['id'],
                                       f'Добавлена тема: {title}')
                     return 'Тема добавлена.'
@@ -702,9 +707,8 @@ class Service:
                                    existing_topic.get('url', '') != url,
                                    bool(deadline) and existing_topic.get('deadline') != deadline))
                     topic = self.db.update_topic(item_id, title, subject, is_common, is_multi,
-                                                 group_name, url, display_number)
-                    if deadline and existing_topic.get('deadline') != deadline:
-                        self.db.set_deadline('topics', item_id, deadline)
+                                                 group_name, url, display_number, deadline=deadline,
+                                                 today=self._today_string())
                     if changed:
                         self.db.clear_topic_presentation_positions(item_id)
                         self.db.enqueue_topic_change(item_id, user_id)
@@ -715,7 +719,7 @@ class Service:
                     active = data.get('active')
                     if type(active) is not bool:
                         raise ActionError('Некорректный статус темы.')
-                    self.db.set_topic_active(item_id, active)
+                    self.db.set_topic_active(item_id, active, today=self._today_string())
                     self.db.log_audit(user_id, 'restore' if active else 'archive', 'topic', item_id,
                                       f"{'Восстановлена' if active else 'Архивирована'} тема: {existing_topic['title']}")
                     return 'Тема возвращена из архива.' if active else 'Тема перенесена в архив.'
@@ -744,7 +748,7 @@ class Service:
                     raise ActionError('Задание или тема не найдены.')
                 deadline = self._valid_deadline(data.get('deadline'))
                 if item.get('deadline') != deadline:
-                    self.db.set_deadline(kind, item_id, deadline)
+                    self.db.set_deadline(kind, item_id, deadline, today=self._today_string())
                     self.db.clear_topic_presentation_positions(item_id)
                     self.db.enqueue_topic_change(item_id, user_id)
                     self.db.log_audit(user_id, 'deadline', 'topic', item_id,
