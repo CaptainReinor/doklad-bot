@@ -4,9 +4,11 @@ import json
 import time
 from datetime import datetime
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 import pytest
 
+import notifications as notifications_module
 import service as service_module
 from database import Database
 from server import create_app
@@ -24,6 +26,7 @@ def stable_study_date(monkeypatch):
             value = cls(2026, 9, 14, 12, 0)
             return value.replace(tzinfo=tz) if tz else value
     monkeypatch.setattr(service_module, 'datetime', StableDateTime)
+    monkeypatch.setattr(notifications_module, 'study_now', lambda: StableDateTime.now(ZoneInfo('Europe/Moscow')))
 
 
 def signed_data(user_id=1, *, token=TEST_TOKEN, auth_date=None, **extra):

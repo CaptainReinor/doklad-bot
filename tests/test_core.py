@@ -417,7 +417,7 @@ def test_four_notification_toggles_and_homework_edits_are_silent(service):
     register(service)
     assert service.db.get_notification_settings(1) == {
         'assignments': True, 'topics': True,
-        'announcements': True, 'lessons': False}
+        'announcements': True, 'lessons': False, 'attendance': False}
     with pytest.raises(ValueError):
         service.db.set_notification(1, 'queue', True)
     subject = service.catalog()['schedule'][0]['subject']

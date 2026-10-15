@@ -137,7 +137,7 @@ async function main() {
         await admin.evaluate(() => switchTab('admin'));
         await admin.getByRole('button', {name:'Статистика'}).click();
         assert.equal(await admin.locator('.activity-column').count(), 30);
-        assert.equal(await admin.locator('.admin-notification-stat').count(), 4);
+        assert.equal(await admin.locator('.admin-notification-stat').count(), 5);
         assert.match(await admin.locator('#adminContent').textContent(), /Входов сегодня/);
         assert.doesNotMatch(await admin.locator('#adminContent').textContent(), /без фамилий|Новый сеанс/);
         assert.equal(await admin.locator('#adminContent').textContent().then(text => /Иванов|Петров/.test(text)), false);
@@ -415,7 +415,7 @@ async function main() {
         checks.push('Registration locks navigation until a valid profile is saved and survives reload');
 
         await b.evaluate(() => switchTab('notifications'));
-        assert.equal(await b.locator('.notification-item').count(), 4);
+        assert.equal(await b.locator('.notification-item').count(), 5);
         assert.equal(await b.locator('.notification-item').filter({hasText:'Изменения расписания'}).count(), 0);
         assert.equal(await b.locator('.notification-item').filter({hasText:'Общий список бронирований'}).count(), 0);
         assert.match(await b.locator('.notification-item').filter({hasText:'Темы докладов'}).textContent(),
@@ -431,7 +431,7 @@ async function main() {
         await b.evaluate(() => switchTab('notifications'));
         assert.equal(await b.getByRole('checkbox', {name:'Домашние задания', exact:true}).isChecked(), false);
         assert.equal(await b.getByRole('checkbox', {name:'Напоминания о парах', exact:true}).isChecked(), true);
-        checks.push('Four independent notification preferences are shown and survive reload');
+        checks.push('Group-specific attendance preference and existing notification preferences survive reload');
 
         const preview = await pageFor(null, 320);
         await preview.evaluate(() => switchTab('reports'));

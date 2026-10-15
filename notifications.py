@@ -7,6 +7,9 @@ import threading
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from attendance import DATES as ATTENDANCE_DATES
+from attendance import GROUP as ATTENDANCE_GROUP
+from attendance import message as attendance_message
 from settings import APP_TIMEZONE, NOTIFICATION_INTERVAL
 from storage import cleanup_uploads
 
@@ -31,6 +34,8 @@ def notification_html(message):
             label, replacement = 'Открыть материалы', ''
         elif 'Подробнее:' in prefix:
             label, replacement = 'Подробнее', ''
+        elif 'СДО:' in prefix:
+            label, replacement = 'Открыть СДО', ''
         elif 'Ссылка:' in prefix:
             label, replacement = 'Подключиться к паре', ''
         else:
@@ -125,9 +130,14 @@ def lesson_day_message(lessons, now, timezone):
     return f"{heading}\n{day}\n\n" + '\n\n'.join(rows)
 
 
+def study_now():
+    return datetime.now(ZoneInfo(APP_TIMEZONE))
+
+
 def check_notifications(service, send_message, *, now=None):
     timezone = ZoneInfo(APP_TIMEZONE)
-    now = now or datetime.now(timezone)
+    fixed_clock = now is not None
+    now = now or study_now()
     now = now.astimezone(timezone) if now.tzinfo is not None else now.replace(tzinfo=timezone)
     try:
         cleanup_uploads(service, now=now.timestamp())
@@ -136,6 +146,14 @@ def check_notifications(service, send_message, *, now=None):
     catalog = service.catalog()
     users = service.db.get_all_users()
     users_by_id = {user['user_id']: user for user in users}
+    attendance = service.db.get_attendance_settings()
+    today = now.strftime('%d.%m.%Y')
+    if attendance['enabled'] and today in attendance['dates'] and today in ATTENDANCE_DATES:
+        hour, minute = map(int, attendance['time'].split(':'))
+        remind_at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if now >= remind_at:
+            service.db.enqueue_notification('attendance', attendance_message(attendance),
+                f'attendance:{today}', {user['user_id'] for user in users if user['group_name'] == ATTENDANCE_GROUP})
     for user in users:
         lessons_by_day = {}
         for lesson in service.visible_lessons(user['user_id']):
@@ -172,6 +190,20 @@ def check_notifications(service, send_message, *, now=None):
     direct_jobs = []
     topic_batches = {}
     for job in service.db.claim_notifications(limit=500, now=now.timestamp()):
+        if job['kind'] == 'attendance':
+            current = service.db.get_attendance_settings()
+            recipient = service.db.get_user(job['user_id'])
+            if (not current['enabled'] or today not in current['dates'] or today not in ATTENDANCE_DATES or
+                    job['event_key'] != f'attendance:{today}' or not recipient or
+                    recipient['group_name'] != ATTENDANCE_GROUP):
+                service.db.finish_notification(job, success=True, now=now.timestamp())
+                continue
+            hour, minute = map(int, current['time'].split(':'))
+            remind_at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if now < remind_at:
+                service.db.defer_notification(job, remind_at.timestamp())
+                continue
+            job['message'] = attendance_message(current)
         if job['event_key'].startswith('lesson-day:'):
             lesson_date = job['event_key'].split(':', 1)[1]
             lessons = [lesson for lesson in service.visible_lessons(job['user_id'])
@@ -234,6 +266,24 @@ def check_notifications(service, send_message, *, now=None):
 
     for job in direct_jobs:
         try:
+            if job['kind'] == 'attendance':
+                # Read eligibility again immediately before the external send.
+                delivery_now = now if fixed_clock else study_now()
+                delivery_today = delivery_now.strftime('%d.%m.%Y')
+                recipient = service.db.get_user(job['user_id'])
+                current = service.db.get_attendance_settings()
+                if (not recipient or recipient['group_name'] != ATTENDANCE_GROUP or
+                        not current['enabled'] or delivery_today not in current['dates'] or
+                        job['event_key'] != f'attendance:{delivery_today}' or
+                        not service.db.get_notification_settings(job['user_id'])['attendance']):
+                    service.db.finish_notification(job, success=True, now=now.timestamp())
+                    continue
+                hour, minute = map(int, current['time'].split(':'))
+                remind_at = delivery_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                if delivery_now < remind_at:
+                    service.db.defer_notification(job, remind_at.timestamp())
+                    continue
+                job['message'] = attendance_message(current)
             send_message(job['user_id'], job['message'])
         except Exception as exc:
             logger.warning('Notification delivery failed (%s); it will be retried.', type(exc).__name__)

@@ -12,6 +12,8 @@ NOTIFICATION_DEFAULTS = {
     'announcements': True,
     # Lesson reminders are opt-in so an update cannot unexpectedly message everyone.
     'lessons': False,
+    # Attendance is default-on for the second group; database settings restrict eligibility.
+    'attendance': True,
 }
 
 

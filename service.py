@@ -5,6 +5,10 @@ from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
+from attendance import DATES as ATTENDANCE_DATES
+from attendance import GROUP as ATTENDANCE_GROUP
+from attendance import SUBJECT as ATTENDANCE_SUBJECT
+from attendance import TEACHER as ATTENDANCE_TEACHER
 from catalog import load_catalog
 from database import BookingConflict, TopicInUse
 from settings import ADMIN_IDS, APP_TIMEZONE
@@ -404,6 +408,9 @@ class Service:
                                           else self.assignments())
             result['adminAnnouncements'] = announcements
             result['adminStats'] = self.db.get_admin_stats()
+            result['attendanceReminder'] = {**self.db.get_attendance_settings(),
+                'availableDates': list(ATTENDANCE_DATES), 'group': ATTENDANCE_GROUP,
+                'subject': ATTENDANCE_SUBJECT, 'teacher': ATTENDANCE_TEACHER}
             result['topicDrafts'] = [{
                 'id': row['id'], 'title': row['title'], 'subject': row['subject'],
                 'number': row['display_number'],
@@ -428,6 +435,13 @@ class Service:
             raise ActionError('Укажите действие.')
         current = self.db.get_user(user_id)
         try:
+            if action == 'save_attendance_reminder':
+                if not self.is_admin(user_id):
+                    raise ActionError('Настраивать напоминания об отметках может только администратор.', 403)
+                self.db.save_attendance_settings(data.get('settings'))
+                self.db.log_audit(user_id, 'update', 'attendance_reminder', None,
+                                  'Изменены напоминания об отметках в СДО для второй группы')
+                return 'Напоминания об отметках сохранены.'
             if action in ('create_announcement', 'update_announcement', 'delete_announcement'):
                 if not self.is_admin(user_id):
                     raise ActionError('Публиковать объявления может только администратор.', 403)
@@ -804,6 +818,8 @@ class Service:
                 return 'Бронирование отменено.' if changed else 'У вас нет брони на эту тему.'
             if action == 'notification_settings':
                 kind = data.get('type')
+                if kind == 'attendance' and current['group_name'] != ATTENDANCE_GROUP:
+                    raise ActionError('Это напоминание доступно только второй группе.', 403)
                 self.db.set_notification(user_id, kind, data.get('enabled'))
                 return 'Настройки уведомлений сохранены.'
             raise ActionError('Неизвестное действие.')

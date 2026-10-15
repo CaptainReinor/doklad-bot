@@ -1,4 +1,5 @@
 """SQLite persistence shared by the bot and the Mini App."""
+import json
 import sqlite3
 import time
 import uuid
@@ -7,6 +8,10 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from attendance import GROUP as ATTENDANCE_GROUP
+from attendance import SETTINGS_KEY as ATTENDANCE_SETTINGS_KEY
+from attendance import default_settings as default_attendance_settings
+from attendance import validate_settings as validate_attendance_settings
 from catalog import NOTIFICATION_DEFAULTS, load_catalog
 from essay_assignment import OPTIONS as ESSAY_OPTIONS
 from essay_assignment import SUBJECT as ESSAY_SUBJECT
@@ -99,6 +104,8 @@ class Database:
                 attempts INTEGER NOT NULL DEFAULT 0, next_attempt REAL NOT NULL DEFAULT 0,
                 PRIMARY KEY(event_key, user_id))''')
             conn.execute('CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT)')
+            conn.execute('INSERT OR IGNORE INTO app_meta (key, value) VALUES (?, ?)',
+                         (ATTENDANCE_SETTINGS_KEY, json.dumps(default_attendance_settings(), ensure_ascii=False)))
             # Schedule changes no longer produce notifications, including queued legacy jobs.
             conn.execute("DELETE FROM notification_settings WHERE kind='schedule'")
             conn.execute('''UPDATE notification_jobs SET sent_at=?, claimed_at=NULL
@@ -388,10 +395,15 @@ class Database:
                    WHERE activity_date BETWEEN ? AND ? GROUP BY activity_date''',
                 (first_day.isoformat(), current_day.isoformat()))}
             total_users = conn.execute('SELECT COUNT(*) FROM users').fetchone()[0]
-            enabled_counts = {kind: int(default) * total_users
+            eligible_counts = {kind: total_users for kind in NOTIFICATION_DEFAULTS}
+            eligible_counts['attendance'] = conn.execute(
+                'SELECT COUNT(*) FROM users WHERE group_name=?', (ATTENDANCE_GROUP,)).fetchone()[0]
+            enabled_counts = {kind: int(default) * eligible_counts[kind]
                               for kind, default in NOTIFICATION_DEFAULTS.items()}
-            for row in conn.execute('SELECT kind, enabled FROM notification_settings'):
-                if row['kind'] in NOTIFICATION_DEFAULTS:
+            for row in conn.execute('''SELECT s.kind, s.enabled, u.group_name FROM notification_settings s
+                JOIN users u ON u.user_id=s.user_id'''):
+                if (row['kind'] in NOTIFICATION_DEFAULTS and
+                        (row['kind'] != 'attendance' or row['group_name'] == ATTENDANCE_GROUP)):
                     enabled_counts[row['kind']] += int(bool(row['enabled'])) - int(
                         NOTIFICATION_DEFAULTS[row['kind']])
         daily = [{'date': (first_day + timedelta(days=offset)).isoformat(),
@@ -405,7 +417,8 @@ class Database:
             'dailyVisits': daily,
             'notifications': [
                 {'kind': kind, 'enabled': enabled_counts[kind],
-                 'percent': round(enabled_counts[kind] * 100 / total_users) if total_users else 0}
+                 **({'eligibleUsers': eligible_counts[kind]} if kind == 'attendance' else {}),
+                 'percent': round(enabled_counts[kind] * 100 / eligible_counts[kind]) if eligible_counts[kind] else 0}
                 for kind in NOTIFICATION_DEFAULTS
             ]
         }
@@ -1302,7 +1315,41 @@ class Database:
         result.update({r['kind']: bool(r['enabled']) for r in conn.execute(
             'SELECT kind, enabled FROM notification_settings WHERE user_id=?', (user_id,))
                        if r['kind'] in NOTIFICATION_DEFAULTS})
+        user = Database._user(conn, user_id)
+        if not user or user['group_name'] != ATTENDANCE_GROUP:
+            result['attendance'] = False
         return result
+
+    def get_attendance_settings(self):
+        with self.connection() as conn:
+            row = conn.execute('SELECT value FROM app_meta WHERE key=?', (ATTENDANCE_SETTINGS_KEY,)).fetchone()
+        if not row:
+            return default_attendance_settings()
+        try:
+            return validate_attendance_settings(json.loads(row['value']))
+        except (ValueError, TypeError):
+            return {**default_attendance_settings(), 'enabled': False}
+
+    def save_attendance_settings(self, data):
+        value = validate_attendance_settings(data)
+        with self.connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            current = conn.execute('SELECT value FROM app_meta WHERE key=?', (ATTENDANCE_SETTINGS_KEY,)).fetchone()
+            try:
+                previous = json.loads(current['value']) if current else None
+            except (ValueError, TypeError):
+                previous = None
+            if previous == value:
+                return value
+            conn.execute('''INSERT INTO app_meta (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value''',
+                         (ATTENDANCE_SETTINGS_KEY, json.dumps(value, ensure_ascii=False)))
+            # Cancel unclaimed retries. Keep in-flight identities so an admin edit during
+            # delivery cannot erase the daily key and send the same reminder twice.
+            # Claimed jobs recheck the current settings immediately before sending.
+            conn.execute("""DELETE FROM notification_jobs WHERE kind='attendance'
+                AND sent_at IS NULL AND claimed_at IS NULL""")
+        return value
 
     def get_notification_settings(self, user_id):
         with self.connection() as conn:

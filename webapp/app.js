@@ -16,7 +16,8 @@ let adminTopicDrafts = [], adminAuditLog = [], adminStats = null;
 let userData = null, isRegistered = false, isAdmin = false;
 let connected = false, busy = false, editingProfile = false;
 let editingTopics = false, editingSchedule = false, editingHomework = false, editingAudit = false, editingStats = false;
-let editingAnnouncements = false;
+let editingAnnouncements = false, editingAttendance = false;
+let attendanceReminder = null;
 let mutationVersion = 0, refreshing = false, uploadingMaterial = false;
 const renderedMarkup = new WeakMap();
 
@@ -290,6 +291,7 @@ function applyState(data) {
     adminAnnouncements = isAdmin && Array.isArray(data.adminAnnouncements) ? data.adminAnnouncements : [];
     adminTopicDrafts = isAdmin && Array.isArray(data.topicDrafts) ? data.topicDrafts : [];
     adminAuditLog = isAdmin && Array.isArray(data.auditLog) ? data.auditLog : [];
+    attendanceReminder = isAdmin && data.attendanceReminder ? data.attendanceReminder : null;
     adminStats = isAdmin && data.adminStats && typeof data.adminStats === "object" ? data.adminStats : null;
     bookings = data.bookings;
     myBookings = bookings.filter(item => item.isMine);
@@ -355,7 +357,7 @@ function renderAll() {
     if (!editingProfile) renderCabinet();
     if (isAdmin) {
         if (editingStats) renderAdminStats();
-        else if (!editingTopics && !editingSchedule && !editingHomework && !editingAudit && !editingAnnouncements) renderAdmin();
+        else if (!editingTopics && !editingSchedule && !editingHomework && !editingAudit && !editingAnnouncements && !editingAttendance) renderAdmin();
     }
     document.querySelectorAll('#cabinetContent button[type="submit"], #adminContent button[type="submit"]').forEach(button => {
         button.disabled = !connected || busy;
@@ -868,6 +870,7 @@ function renderAdmin() {
     editingAudit = false;
     editingStats = false;
     editingAnnouncements = false;
+    editingAttendance = false;
     document.getElementById("adminContent").innerHTML = `<div class="profile-card card">
         <h3 class="section-title">Управление</h3>
         <div class="admin-actions">
@@ -876,8 +879,44 @@ function renderAdmin() {
         <button class="btn btn-primary" onclick="renderScheduleEditor()">Управление расписанием</button>
         <button class="btn btn-primary" onclick="renderAnnouncementEditor()">Объявления</button>
         <button class="btn btn-primary" onclick="renderAdminStats()">Статистика</button>
+        <button class="btn btn-primary" onclick="renderAttendanceEditor()">Отметки в СДО</button>
         <button class="btn btn-outline" onclick="renderAuditLog()">История действий</button>
         </div></div>`;
+}
+
+function renderAttendanceEditor() {
+    if (!isAdmin || !attendanceReminder) return;
+    renderAdmin();
+    editingProfile = false;
+    editingAttendance = true;
+    const settings = attendanceReminder;
+    const selected = new Set(settings.dates || []);
+    document.getElementById("adminContent").innerHTML = `<div class="profile-card card admin-editor">
+        <h3 class="section-title">Отметки в СДО</h3>
+        <h4>${escapeHtml(settings.subject)}</h4>
+        <p>${escapeHtml(settings.group)} · ${escapeHtml(settings.teacher)}</p>
+        <label class="checkbox-label"><input type="checkbox" id="attendanceEnabled" ${settings.enabled ? "checked" : ""}> Напоминания включены</label>
+        <label class="form-label" for="attendanceTime">Время по Москве</label>
+        <input class="form-control" type="time" id="attendanceTime" value="${escapeHtml(settings.time)}" required>
+        <label class="form-label">Даты напоминаний</label>
+        <div class="attendance-dates">${(settings.availableDates || []).map(day =>
+            `<label class="checkbox-label"><input type="checkbox" data-attendance-date value="${escapeHtml(day)}" ${selected.has(day) ? "checked" : ""}> ${escapeHtml(day)}</label>`).join("")}</div>
+        <label class="form-label" for="attendanceUrl">Ссылка на отметку в СДО (необязательно)</label>
+        <input class="form-control" type="url" id="attendanceUrl" value="${escapeHtml(settings.url || "")}" placeholder="https://">
+        <div class="admin-actions">
+            <button class="btn btn-primary" onclick="saveAttendanceReminder()">Сохранить</button>
+            <button class="btn btn-secondary" onclick="renderAdmin()">К управлению</button>
+        </div></div>`;
+}
+
+async function saveAttendanceReminder() {
+    const settings = {
+        enabled: document.getElementById("attendanceEnabled").checked,
+        time: document.getElementById("attendanceTime").value,
+        dates: Array.from(document.querySelectorAll('[data-attendance-date]:checked')).map(input => input.value),
+        url: document.getElementById("attendanceUrl").value.trim()
+    };
+    if (await performAction({action: "save_attendance_reminder", settings})) renderAttendanceEditor();
 }
 
 function dateInputValue(value) {
@@ -893,6 +932,7 @@ function renderTopicEditor() {
     editingAudit = false;
     editingStats = false;
     editingAnnouncements = false;
+    editingAttendance = false;
     editingTopics = true;
     const subjectOptions = [...new Set(scheduleData.map(item => item.subject).filter(Boolean))]
         .sort((a, b) => shortSubject(a).localeCompare(shortSubject(b), "ru"));
@@ -1183,6 +1223,7 @@ function renderScheduleEditor() {
     editingAudit = false;
     editingStats = false;
     editingAnnouncements = false;
+    editingAttendance = false;
     editingSchedule = true;
     const todayStart = calendarTime(studyToday());
     const lessons = [...adminLessons].sort((a, b) => {
@@ -1232,6 +1273,7 @@ const notificationTypes = [
     {id: "announcements", title: "Объявления", description: "Важные сообщения от администраторов."},
     {id: "assignments", title: "Домашние задания", description: "Новая домашка и напоминания за день до сдачи."},
     {id: "lessons", title: "Напоминания о парах", description: "Одна сводка за день примерно за час до первой пары."},
+    {id: "attendance", title: "Отметки в СДО", description: "Напоминания об отметке у Кучиной О.В. в отдельные дни второй группы."},
     {id: "topics", title: "Темы докладов", description: "Новые темы, изменения старых, напоминание за день до сдачи."}
 ];
 
@@ -1243,6 +1285,7 @@ function renderAdminStats() {
     editingHomework = false;
     editingAudit = false;
     editingAnnouncements = false;
+    editingAttendance = false;
     editingStats = true;
     const stats = adminStats || {registeredUsers: 0, visitsToday: 0, visits7Days: 0,
         visits30Days: 0, dailyVisits: [], notifications: []};
@@ -1264,7 +1307,7 @@ function renderAdminStats() {
     const notificationRows = (Array.isArray(stats.notifications) ? stats.notifications : []).map(item => `
         <div class="admin-notification-stat">
             <div><strong>${escapeHtml(notificationNames[item.kind] || item.kind)}</strong>
-            <span>${Number(item.enabled) || 0} из ${Number(stats.registeredUsers) || 0} пользователей</span></div>
+            <span>${Number(item.enabled) || 0} из ${Number(item.eligibleUsers ?? stats.registeredUsers) || 0} пользователей</span></div>
             <b>${Number(item.percent) || 0}%</b>
         </div>`).join("");
     document.getElementById("adminContent").innerHTML = `<div class="profile-card card admin-editor">
@@ -1290,7 +1333,7 @@ function renderAdminStats() {
 function closeAdminStats() { editingStats = false; renderAdmin(); }
 
 function renderNotifications() {
-    document.getElementById("notificationsContainer").innerHTML = notificationTypes.map(item => `
+    document.getElementById("notificationsContainer").innerHTML = notificationTypes.filter(item => item.id !== "attendance" || userData?.group_name === "МН-4-25-02").map(item => `
         <div class="notification-item"><div class="notification-info">
         <div class="notification-title">${item.title}</div><div class="notification-description">${item.description}</div></div>
         <label class="switch"><input aria-label="${item.title}" type="checkbox" ${notificationSettings[item.id] ? "checked" : ""}
@@ -1463,6 +1506,7 @@ function renderHomeworkEditor() {
     editingAudit = false;
     editingStats = false;
     editingAnnouncements = false;
+    editingAttendance = false;
     editingHomework = true;
     const assignmentCounts = {active: adminAssignments.filter(item => !item.archived).length,
         archive: adminAssignments.filter(item => item.archived).length};
@@ -1551,6 +1595,7 @@ function renderAuditLog() {
     editingHomework = false;
     editingStats = false;
     editingAnnouncements = false;
+    editingAttendance = false;
     editingAudit = true;
     const actionNames = {create: "Создание", update: "Изменение", delete: "Удаление",
         archive: "Архив", restore: "Восстановление", deadline: "Срок",
